@@ -76,6 +76,19 @@ api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config
+    const licensePayload = error.response?.data
+    if (error.response?.status === 403 && (
+      licensePayload?.license_blocked || licensePayload?.activation_required
+    )) {
+      window.dispatchEvent(new CustomEvent('flirexa:license-invalidated', {
+        detail: {
+          blocked: Boolean(licensePayload?.license_blocked),
+          activationRequired: Boolean(licensePayload?.activation_required),
+          message: licensePayload?.detail || '',
+        },
+      }))
+    }
+
     // 403 activation_required → redirect to activation screen
     if (error.response?.status === 403 && error.response?.data?.activation_required) {
       const data = error.response.data
@@ -424,6 +437,16 @@ export const backupApi = {
   // do not throw if there is a build cache we missed.
   mountStatus: () => api.get('/backup/storage/status'),
   testWrite: () => api.post('/backup/storage/test-write'),
+}
+
+export const panelMigrationApi = {
+  preflight: (data) => api.post('/panel-migration/preflight', data, { timeout: 60000, silent: true }),
+  start: (data) => api.post('/panel-migration/start', data, { timeout: 60000 }),
+  status: () => api.get('/panel-migration/status', { silent: true }),
+  cutover: () => api.post('/panel-migration/cutover', {}, { timeout: 180000 }),
+  rollback: () => api.post('/panel-migration/rollback', {}, { timeout: 180000 }),
+  finalise: () => api.post('/panel-migration/finalise', {}, { timeout: 60000 }),
+  cancel: () => api.post('/panel-migration/cancel', {}, { timeout: 60000 }),
 }
 
 export const systemApi = {

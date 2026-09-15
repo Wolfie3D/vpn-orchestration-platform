@@ -466,6 +466,95 @@ async def get_config():
 # LICENSE
 # ============================================================================
 
+def _effective_license_status(
+    status: Dict[str, Any],
+    *,
+    online_blocked: bool,
+    online_reason: str = "",
+    has_license_key: bool = False,
+) -> Dict[str, Any]:
+    """Return the entitlement the UI may actually use right now.
+
+    The signed local key and the online validator answer different questions:
+    the former describes what was purchased, while the latter can revoke or
+    expire that entitlement.  Returning the signed feature list after the
+    middleware has already blocked those routes leaves the interface visibly
+    stale.  Keep signed values for diagnostics, but expose Community limits and
+    features whenever runtime enforcement has blocked the paid entitlement.
+    """
+    from ...modules.license.manager import LICENSE_TIERS, LicenseType
+
+    effective = dict(status or {})
+    effective.setdefault("type", effective.get("license_type", "free"))
+    effective.setdefault("is_trial", False)
+    effective.setdefault("trial_duration_days", None)
+
+    message = str(effective.get("message") or "")
+    local_expired_fallback = (
+        has_license_key
+        and effective.get("license_type") == LicenseType.FREE.value
+        and "expired" in message.lower()
+    )
+
+    trial_expired = False
+    if effective.get("is_trial") and effective.get("expires_at"):
+        try:
+            expires_at = datetime.fromisoformat(str(effective["expires_at"]))
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            trial_expired = datetime.now(timezone.utc) >= expires_at
+        except (TypeError, ValueError):
+            # A malformed signed timestamp is not a reason to extend a trial.
+            trial_expired = True
+
+    blocked = bool(online_blocked or local_expired_fallback or trial_expired)
+    if not blocked:
+        effective["is_blocked"] = False
+        effective["blocked_reason"] = ""
+        effective["entitlement_state"] = "active"
+        return effective
+
+    signed_fields = {
+        "license_type": "signed_license_type",
+        "plan": "signed_plan",
+        "billing_type": "signed_billing_type",
+        "enforcement": "signed_enforcement",
+        "features": "signed_features",
+        "max_clients": "signed_max_clients",
+        "max_servers": "signed_max_servers",
+        "expires_at": "signed_expires_at",
+        "is_trial": "signed_is_trial",
+        "trial_duration_days": "signed_trial_duration_days",
+    }
+    for source, destination in signed_fields.items():
+        effective[destination] = effective.get(source)
+
+    free = LICENSE_TIERS[LicenseType.FREE]
+    reason = online_reason or (
+        "Enterprise trial expired" if trial_expired else message
+    ) or "License entitlement is no longer active"
+    effective.update({
+        "license_type": LicenseType.FREE.value,
+        "type": LicenseType.FREE.value,
+        "plan": LicenseType.FREE.value,
+        "billing_type": "free",
+        "enforcement": "community",
+        "is_valid": False,
+        "is_trial": False,
+        "trial_duration_days": None,
+        "max_clients": free["max_clients"],
+        "max_servers": free["max_servers"],
+        "features": list(free["features"]),
+        "expires_at": None,
+        "days_remaining": None,
+        "grace_period": False,
+        "message": reason,
+        "is_blocked": True,
+        "blocked_reason": reason,
+        "entitlement_state": "blocked",
+    })
+    return effective
+
 @router.get("/activation")
 async def get_activation_info():
     """
@@ -494,6 +583,20 @@ def get_license_status(db: Session = Depends(get_db)):
 
     # Normalize: add `type` alias for `license_type` so the frontend can use either
     status["type"] = status.get("license_type", "trial")
+
+    online_blocked = False
+    online_reason = ""
+    try:
+        from ...modules.license.online_validator import is_license_blocked
+        online_blocked, online_reason = is_license_blocked()
+    except ImportError:
+        pass
+    status = _effective_license_status(
+        status,
+        online_blocked=online_blocked,
+        online_reason=online_reason,
+        has_license_key=bool(os.getenv("LICENSE_KEY", "").strip()),
+    )
 
     # Current usage from DB (for compliance bars in UI)
     try:

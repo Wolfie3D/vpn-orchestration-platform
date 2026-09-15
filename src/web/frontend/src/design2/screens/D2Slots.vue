@@ -93,6 +93,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { d2confirm } from '../ui/confirm'
 import { useI18n } from 'vue-i18n'
+import { translateGlobal } from '../../i18n/translate'
 import { clientsApi, portalUsersApi } from '../../api'
 import { formatBytes } from '../../utils'
 import { useD2Ui } from '../../stores/d2ui'
@@ -100,7 +101,7 @@ import D2Modal from '../ui/D2Modal.vue'
 import D2Button from '../ui/D2Button.vue'
 
 const { t } = useI18n({ useScope: 'global' })
-function tr(k) { try { const v = t(k); return v === k ? '' : v } catch (_) { return '' } }
+function tr(k) { try { return translateGlobal(k) } catch (_) { return '' } }
 const ui = useD2Ui()
 const slots = ref([])
 const loading = ref(false)
@@ -266,7 +267,7 @@ async function submitAddSlot() {
 
 onMounted(() => {
   ui.set({
-    title: tr('nav.slots') || 'Slots',
+    title: tr('nav.slots') || 'Device Slots',
     subtitle: tr('slots.subtitle') || 'Multi-region customer devices',
     primary: { label: tr('slots.add') || 'Add slot', onClick: openAddSlot },
   })

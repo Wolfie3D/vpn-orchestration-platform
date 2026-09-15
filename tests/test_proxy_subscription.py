@@ -158,6 +158,10 @@ def _vless_server(**overrides):
 
 @pytest.fixture
 def ctx():
+    public_key_patch = patch(
+        "src.modules.license.manager._find_public_key", return_value=None
+    )
+    public_key_patch.start()
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -196,6 +200,7 @@ def ctx():
 
     Base.metadata.drop_all(bind=engine)
     engine.dispose()
+    public_key_patch.stop()
 
 
 def _link(db, client):

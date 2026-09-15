@@ -47,6 +47,8 @@ PLUGINS = [
      [LicenseType.PRO, LicenseType.BUSINESS, LicenseType.ENTERPRISE]),
     ("dns-policy-advanced", "dns_policy_advanced",
      [LicenseType.ENTERPRISE]),
+    ("google-play-billing", "payments",
+     [LicenseType.PRO, LicenseType.BUSINESS, LicenseType.ENTERPRISE]),
 ]
 
 

@@ -119,6 +119,81 @@ def test_restore_command_success(monkeypatch, tmp_path):
     assert post_maintenance_calls == [(False, None)]
 
 
+def test_migration_restore_keeps_target_cold_and_applies_fence(monkeypatch, tmp_path):
+    archive = tmp_path / "vpnmanager-backup-20260327-100000.tar.gz"
+    archive.write_bytes(b"test")
+    initial_status = _status(tmp_path)
+    failed_post = _status(tmp_path).to_dict()
+    failed_post["result"] = "failed"
+    monkeypatch.setattr("src.modules.restore_cli.collect_system_status", lambda: initial_status)
+    monkeypatch.setattr(
+        "src.modules.restore_cli._collect_post_restore_status_payload", lambda: failed_post
+    )
+    monkeypatch.setattr("src.modules.restore_cli.get_db_context", _db_context)
+    monkeypatch.setattr("src.modules.restore_cli._destructive_restore_db_context", _db_context)
+    monkeypatch.setattr("src.modules.restore_cli.os.geteuid", lambda: 0)
+    monkeypatch.setattr("src.modules.restore_cli.os.access", lambda path, mode: True)
+    monkeypatch.setattr("src.modules.restore_cli.shutil.which", lambda tool: f"/usr/bin/{tool}")
+    monkeypatch.setattr(
+        "src.modules.restore_cli.shutil.disk_usage",
+        lambda path: type("DU", (), {"free": 1024 * 1024 * 1024})(),
+    )
+    monkeypatch.setattr(
+        "src.modules.restore_cli.get_explicit_maintenance_state",
+        lambda db: type("State", (), {"enabled": False, "reason": None})(),
+    )
+    monkeypatch.setattr(
+        "src.modules.restore_cli.set_maintenance_mode",
+        lambda enabled, reason, source, actor: type(
+            "Mode", (), {"mode": "maintenance", "maintenance_reason": reason}
+        )(),
+    )
+    post_maintenance_calls = []
+    monkeypatch.setattr(
+        "src.modules.restore_cli._set_post_restore_maintenance",
+        lambda enabled, reason=None: post_maintenance_calls.append((enabled, reason))
+        or ("maintenance" if enabled else "normal", reason if enabled else None),
+    )
+    captured = {}
+
+    class FakeManager:
+        def __init__(self, db, backup_dir=None):
+            pass
+
+        def verify_backup(self, backup_id):
+            return {"ok": True, "errors": [], "metadata": {"backup_type": "full"}}
+
+        def restore_full_system(self, backup_id, **kwargs):
+            captured.update(kwargs)
+            return {
+                "backup_id": backup_id,
+                "database_restored": True,
+                "env_restored": True,
+                "wireguard_restored": ["wg0.conf"],
+                "services_restarted": False,
+                "errors": [],
+            }
+
+    monkeypatch.setattr("src.modules.restore_cli.BackupManager", FakeManager)
+
+    result = create_restore_command(
+        archive=str(archive), migration_standby=True, migration_instance_id="new-instance"
+    )
+
+    assert result.success is True
+    assert captured["restart_services"] is False
+    assert captured["post_env_overrides"] == {
+        "FLIREXA_MIGRATION_STANDBY": "1",
+        "INSTANCE_ID": "new-instance",
+        "LICENSE_KEY": "",
+    }
+    assert post_maintenance_calls[-1] == (
+        True,
+        "Migration target is prepared and waiting for cutover",
+    )
+    assert any("standby" in warning.lower() for warning in result.warnings)
+
+
 def test_restore_command_fails_when_update_active(monkeypatch, tmp_path):
     status = _status(tmp_path, mode="update_in_progress")
     monkeypatch.setattr("src.modules.restore_cli.collect_system_status", lambda: status)

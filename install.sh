@@ -834,11 +834,12 @@ install_system_deps() {
         done
     }
 
-    # AmneziaWG (DPI-resistant) is a FREE-tier feature. Never silently degrade
+    # AmneziaWG (DPI-resistant) is available in Community Edition and supported
+    # commercial plans. Never silently degrade
     # to WireGuard-only: preflight verifies the PPA Release file and requires
     # explicit consent when the OS has no compatible repository. If the PPA or
     # package install changes state after preflight, ask again before continuing.
-    log_info "Installing AmneziaWG (FREE-tier DPI-resistant protocol)..."
+    log_info "Installing AmneziaWG (DPI-resistant protocol)..."
     if [[ "$AMNEZIAWG_INSTALL_MODE" == "skip" ]]; then
         log_warn "  AmneziaWG skipped after explicit confirmation — WireGuard-only on this host"
     else
@@ -1551,7 +1552,7 @@ PYEOF
 
     # ── License Activation ────────────────────────────────────────────────────
     # Always prompt for an activation code when interactive (incl. via curl|bash,
-    # by reading from /dev/tty). Empty / N / no / skip → FREE tier. Non-interactive
+    # by reading from /dev/tty). Empty / N / no / skip → Community Edition. Non-interactive
     # mode stays unprompted; SB_ACTIVATION_CODE / SB_LICENSE_KEY env vars short-
     # circuit the prompt so CI/automation can pass a paid code without a TTY.
     local activation_code="${SB_ACTIVATION_CODE:-}"
@@ -1561,8 +1562,9 @@ PYEOF
         echo ""
         echo -e "${BOLD}License Activation${NC}"
         echo ""
-        echo "  Have a paid Activation Code (XXXX-XXXX-XXXX-XXXX)? Paste it below."
-        echo "  Press Enter (or type N) to install in FREE tier."
+        echo "  Have a Flirexa Activation Code (XXXX-XXXX-XXXX-XXXX)? Paste it below."
+        echo "  It can activate a 7-Day Enterprise Trial or a purchased Starter, Business, or Enterprise plan."
+        echo "  Press Enter (or type N) to install Community Edition."
         echo ""
         # Read from /dev/tty so the prompt works even under `curl … | bash`,
         # where stdin is the script pipe and a plain `read` fails immediately.
@@ -1577,13 +1579,13 @@ PYEOF
         # Probe with `exec 9<` so the failure is silent, and only prompt
         # if the fd actually opened.
         if exec 9</dev/tty 2>/dev/null; then
-            read -r -p "  Activation Code (or N for FREE): " activation_code <&9 || activation_code=""
+            read -r -p "  Activation Code (or N for Community Edition): " activation_code <&9 || activation_code=""
             exec 9<&- || true
         else
-            log_info "  No TTY available — installing in FREE tier"
+            log_info "  No TTY available — installing Community Edition"
             activation_code=""
         fi
-        # Treat explicit "no" inputs as FREE.
+        # Treat explicit "no" inputs as Community Edition.
         case "${activation_code,,}" in
             ""|"n"|"no"|"free"|"skip") activation_code="" ;;
         esac
@@ -1622,7 +1624,7 @@ PYEOF
         log_info "  License key saved"
     else
         sed -i "s|^LICENSE_CHECK_ENABLED=.*|LICENSE_CHECK_ENABLED=true|" "$INSTALL_DIR/.env"
-        log_info "  Running on FREE tier (no activation needed)"
+        log_info "  Running Community Edition (no activation needed)"
     fi
 
     update_env_value() {
@@ -2431,21 +2433,21 @@ print_summary() {
     local license_key
     license_key=$(grep "^LICENSE_KEY=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)
     if [[ -z "$license_key" ]]; then
-        echo -e "  ${BOLD}Tier:${NC} FREE (WireGuard + AmneziaWG, up to 80 clients,"
-        echo "         1 server per protocol)."
-        echo "    Want paid features (multi-server, Hysteria2/TUIC,"
-        echo "    auto-backup, white-label)? Get an Activation Code at"
+        echo -e "  ${BOLD}Tier:${NC} Community Edition (WireGuard + AmneziaWG, up to 20 clients,"
+        echo "         one local VPN server total)."
+        echo "    Want commercial features such as a customer portal, payments,"
+        echo "    managed locations, backups, or white-label controls? Get an Activation Code at"
         echo "    https://flirexa.biz and paste it in the admin panel"
         echo "    under Settings → License."
         echo ""
     fi
 
-    echo "  Features:"
+    echo "  Included at installation:"
     echo "    - JWT-authenticated admin panel with brute-force protection"
-    echo "    - Client self-service portal with subscription plans"
-    echo "    - Agent mode for remote WireGuard management"
-    echo "    - Telegram bots (admin + client)"
-    echo "    - Backup/restore, traffic rules, bandwidth limits"
+    echo "    - Basic client management, QR codes, configuration export, and traffic statistics"
+    echo "    - One local WireGuard or AmneziaWG VPN server"
+    echo "    - Community updates and the admin Telegram bot runtime"
+    echo "    - Activate a trial or purchased plan later in Settings → License"
     echo ""
     echo "  Management Commands:"
     echo "    systemctl status vpnmanager-api"

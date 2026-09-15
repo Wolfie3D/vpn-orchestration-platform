@@ -233,7 +233,10 @@ def _collect_post_restore_status_payload() -> dict:
     return last_payload
 
 
-def create_restore_command(*, archive: str | None = None, from_dir: str | None = None) -> RestoreCommandResult:
+def create_restore_command(
+    *, archive: str | None = None, from_dir: str | None = None,
+    migration_standby: bool = False, migration_instance_id: str | None = None,
+) -> RestoreCommandResult:
     status = collect_system_status()
 
     if os.geteuid() != 0:
@@ -391,8 +394,23 @@ def create_restore_command(*, archive: str | None = None, from_dir: str | None =
                 )
             manager_result = mgr.restore_full_system(
                 backup_id,
-                restart_services=True,
+                # A migration target must remain a cold standby. Starting the
+                # restored worker or bots even for a few seconds could process
+                # payments, notifications or renewals twice.
+                restart_services=not migration_standby,
                 stop_services=True,
+                post_env_overrides=(
+                    {
+                        "FLIREXA_MIGRATION_STANDBY": "1",
+                        "INSTANCE_ID": migration_instance_id or "",
+                        # A prepared/cancelled target must never retain a
+                        # reusable copy of the source panel's licence. The
+                        # authority supplies the successor key only during
+                        # the atomic cutover.
+                        "LICENSE_KEY": "",
+                    }
+                    if migration_standby else None
+                ),
                 audit_user_type="admin",
                 audit_source="cli",
                 audit_actor="vpnmanager",
@@ -440,7 +458,7 @@ def create_restore_command(*, archive: str | None = None, from_dir: str | None =
     }
 
     errors = list(manager_result.get("errors") or [])
-    if post_status.get("result") == "failed":
+    if post_status.get("result") == "failed" and not migration_standby:
         errors.extend(post_status.get("failed_reasons") or ["post-restore health failed"])
     elif post_status.get("result") == "degraded":
         warnings.extend(post_status.get("degraded_reasons") or [])
@@ -449,7 +467,7 @@ def create_restore_command(*, archive: str | None = None, from_dir: str | None =
     final_mode = post_status.get("mode") or "normal"
     maintenance_reason = post_status.get("maintenance_reason")
 
-    if success and maintenance_changed:
+    if success and maintenance_changed and not migration_standby:
         try:
             final_mode, maintenance_reason = _set_post_restore_maintenance(False)
         except Exception as exc:
@@ -469,6 +487,15 @@ def create_restore_command(*, archive: str | None = None, from_dir: str | None =
             final_mode = "maintenance"
             maintenance_reason = f"restore failed from {archive_path.name}; manual verification required"
 
+    if migration_standby and success:
+        try:
+            final_mode, maintenance_reason = _set_post_restore_maintenance(
+                True, reason="Migration target is prepared and waiting for cutover"
+            )
+        except Exception as exc:
+            success = False
+            errors.append(f"Failed to keep migration target in maintenance mode: {exc}")
+        warnings.append("Target restored in migration standby; cutover is required before use")
     return RestoreCommandResult(
         success=success,
         action="restore_full",

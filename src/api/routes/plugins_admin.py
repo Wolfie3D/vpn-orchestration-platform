@@ -27,6 +27,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from ...modules.license.manager import get_license_manager
+from ...modules.plugin_loader.base import PluginManifestError, load_manifest
+from ...modules.plugin_loader.state import is_plugin_enabled, set_plugin_enabled
 from ..middleware.auth import get_current_admin
 
 
@@ -40,6 +43,7 @@ _CORE_PLUGINS: set[str] = {
     "client-tg-bot",
     "corporate-vpn",
     "extra-protocols",
+    "google-play-billing",
     "manager-rbac",
     "multi-server",
     "payments",
@@ -89,10 +93,22 @@ class InstalledPlugin(BaseModel):
     version: Optional[str] = None
     display_name: Optional[str] = None
     description: Optional[str] = None
+    author: Optional[str] = None
     requires_license_feature: Optional[str] = None
     is_core: bool = False
+    loaded: bool = False
+    license_available: bool = False
+    operator_toggleable: bool = False
+    enabled: bool = True
+    effective_enabled: bool = False
+    configured: Optional[bool] = None
+    runtime_status: dict = Field(default_factory=dict)
     user_installed_at: Optional[str] = None
     user_installed_from: Optional[str] = None
+
+
+class PluginStateRequest(BaseModel):
+    enabled: bool
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -195,7 +211,7 @@ def _read_manifest(plugin_dir: Path) -> dict:
 
 
 @router.get("/installed", response_model=list[InstalledPlugin])
-async def list_installed(_admin=Depends(get_current_admin)):
+async def list_installed(request: Request, _admin=Depends(get_current_admin)):
     """List every plugin directory under plugins/ with its manifest data."""
     user_index = _read_user_index()
     out: list[InstalledPlugin] = []
@@ -216,19 +232,87 @@ async def list_installed(_admin=Depends(get_current_admin)):
 
         is_core = child.name in _CORE_PLUGINS
         user_meta = user_index.get(child.name, {})
+        toggleable = bool(manifest.get("operator_toggleable", False))
+        default_enabled = bool(manifest.get("default_enabled", True))
+        enabled = is_plugin_enabled(child.name, default=default_enabled)
+        loader = getattr(request.app.state, "plugin_loader", None)
+        record = loader.records.get(child.name) if loader is not None else None
+        loaded = bool(record and record.loaded)
+        license_available = bool(loaded or (record and not record.skipped))
+        runtime_status: dict = {}
+        if record and record.plugin is not None:
+            try:
+                runtime_status = record.plugin.get_admin_status() or {}
+            except Exception as exc:
+                logger.warning("Plugin admin status failed for {}: {}", child.name, exc)
+                runtime_status = {"status_error": True}
+        enabled = bool(runtime_status.get("operator_enabled", enabled))
 
         out.append(InstalledPlugin(
             name=child.name,
             version=manifest.get("version"),
             display_name=manifest.get("display_name"),
             description=manifest.get("description"),
+            author=manifest.get("author"),
             requires_license_feature=manifest.get("requires_license_feature"),
             is_core=is_core,
+            loaded=loaded,
+            license_available=license_available,
+            operator_toggleable=toggleable,
+            enabled=enabled,
+            effective_enabled=bool(
+                runtime_status.get("effective_enabled", enabled and loaded)
+            ),
+            configured=runtime_status.get("configured"),
+            runtime_status=runtime_status,
             user_installed_at=user_meta.get("installed_at"),
             user_installed_from=user_meta.get("source_url"),
         ))
 
     return out
+
+
+@router.patch("/{name}/state")
+async def update_plugin_state(
+    name: str,
+    body: PluginStateRequest,
+    request: Request,
+    admin: dict = Depends(get_current_admin),
+):
+    """Enable or disable a toggleable built-in plugin without deleting data."""
+
+    if not _NAME_RE.match(name):
+        raise HTTPException(400, f"Invalid plugin name: {name!r}")
+    plugin_dir = _plugins_root() / name
+    if not plugin_dir.is_dir():
+        raise HTTPException(404, f"Plugin {name!r} is not installed")
+    try:
+        manifest = load_manifest(plugin_dir)
+    except PluginManifestError as exc:
+        raise HTTPException(409, f"Plugin manifest is invalid: {exc}") from exc
+    if not manifest.get("operator_toggleable", False):
+        raise HTTPException(409, f"Plugin {name!r} cannot be toggled at runtime")
+
+    required_feature = manifest["requires_license_feature"]
+    if body.enabled and required_feature != "community":
+        if not get_license_manager().has_feature(required_feature):
+            raise HTTPException(403, "Your licence does not include this plugin")
+
+    loader = getattr(request.app.state, "plugin_loader", None)
+    if body.enabled and (loader is None or not loader.is_loaded(name)):
+        raise HTTPException(409, "Plugin is not loaded; restart the API and try again")
+
+    set_plugin_enabled(name, body.enabled)
+    logger.info(
+        "Plugin state changed: name={} enabled={} by={}",
+        name, body.enabled, admin.get("username", "?"),
+    )
+    return {
+        "ok": True,
+        "name": name,
+        "enabled": body.enabled,
+        "restart_required": False,
+    }
 
 
 @router.post("/install", status_code=201)

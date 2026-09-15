@@ -6,15 +6,17 @@
     <D2App />
     <UpgradeBanner />
     <UpgradeModal />
+    <D2TrialExpiryModal />
   </template>
 </template>
 
 <script setup>
-import { computed, onMounted, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import UpgradeBanner from './components/UpgradeBanner.vue'
 import UpgradeModal from './components/UpgradeModal.vue'
 import D2App from './design2/D2App.vue'
+import D2TrialExpiryModal from './design2/shell/D2TrialExpiryModal.vue'
 import { useSystemStore } from './stores/system'
 import { useBrandingStore } from './stores/branding'
 import { useLicenseStore } from './stores/license'
@@ -25,6 +27,23 @@ const branding = useBrandingStore()
 const license = useLicenseStore()
 
 const isLoginPage = computed(() => route.name === 'Login')
+let licenseTimer = null
+
+function hasSession() {
+  try { return Boolean(localStorage.getItem('sb_token')) } catch (_) { return false }
+}
+
+function refreshLicense() {
+  if (!isLoginPage.value && hasSession()) license.load({ silent: true })
+}
+
+function onLicenseInvalidated() {
+  refreshLicense()
+}
+
+function onLicenseVisibility() {
+  if (!document.hidden) refreshLicense()
+}
 
 onMounted(() => {
   system.initTheme()
@@ -35,6 +54,10 @@ onMounted(() => {
   // Skip on the login page — /api/v1/system/license requires auth and
   // would just 401 anyway; will get loaded after login by the watcher below.
   if (!isLoginPage.value && !license.loaded) license.load()
+  window.addEventListener('flirexa:license-invalidated', onLicenseInvalidated)
+  window.addEventListener('focus', refreshLicense)
+  document.addEventListener('visibilitychange', onLicenseVisibility)
+  licenseTimer = window.setInterval(refreshLicense, 60 * 1000)
 })
 
 // When the user navigates away from the login page (i.e. just logged
@@ -42,6 +65,13 @@ onMounted(() => {
 // the empty default and feature-gated UI stays hidden until the next
 // full-page reload.
 watch(isLoginPage, (onLogin) => {
-  if (!onLogin && !license.loaded) license.load()
+  if (!onLogin) refreshLicense()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('flirexa:license-invalidated', onLicenseInvalidated)
+  window.removeEventListener('focus', refreshLicense)
+  document.removeEventListener('visibilitychange', onLicenseVisibility)
+  if (licenseTimer) window.clearInterval(licenseTimer)
 })
 </script>

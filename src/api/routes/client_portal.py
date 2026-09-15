@@ -26,6 +26,7 @@ import asyncio
 import logging
 import json
 import re
+import httpx
 
 logger = logging.getLogger(__name__)
 import random
@@ -42,6 +43,7 @@ from src.database.models import Server
 from src.modules.subscription.subscription_models import (
     PaymentMethod, ClientUserClients, ClientUser, ClientRefreshToken,
     PortalRateLimit, ClientPortalPayment,
+    GooglePlaySubscription,
     SubscriptionStatus,
 )
 from src.modules.subscription.subscription_manager import SubscriptionManager
@@ -94,11 +96,10 @@ _invoice_rate: dict[int, list[float]] = {}  # per user_id, max 5/hour
 _forgot_cooldowns: dict[str, float] = {}  # per-email cooldown for forgot-password
 _SUBSCRIPTION_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
 
-# Runtime safety switch. The former scheduler granted another paid period
-# without a newly verified provider settlement. Keep the signed entitlement
-# for compatibility, but hide and reject the feature until its replacement is
-# payment-bound and idempotent end to end.
-_AUTO_RENEWAL_RUNTIME_ENABLED = False
+# The former scheduler granted time without payment and was removed. The
+# replacement can only debit prepaid USD credit atomically with the matching
+# subscription extension; operator entitlements still gate every surface.
+_AUTO_RENEWAL_RUNTIME_ENABLED = True
 
 
 def _positive_int_env(name: str, default: int, maximum: int = 86400) -> int:
@@ -702,6 +703,16 @@ class BalancePurchaseRequest(BaseModel):
     request_id: str = Field(..., min_length=16, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
 
 
+class GooglePlayVerifyRequest(BaseModel):
+    purchase_token: str = Field(..., min_length=20, max_length=4096)
+
+
+class AutoRenewRequest(BaseModel):
+    auto_renew: bool
+    source: Literal["balance"] = "balance"
+    duration_days: int = Field(30)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # JWT AUTH HELPERS
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1173,6 +1184,7 @@ async def get_features(
             "auto_renewal": (
                 _AUTO_RENEWAL_RUNTIME_ENABLED
                 and _operator_has_feature("auto_renewal")
+                and _operator_has_feature("payments")
             ),
         },
         "portal_mode": get_client_portal_mode(db),
@@ -1314,6 +1326,12 @@ async def get_subscription(
         "days_remaining": subscription.days_remaining,
         "auto_renew": bool(
             _AUTO_RENEWAL_RUNTIME_ENABLED and subscription.auto_renew
+        ),
+        "auto_renew_source": (
+            subscription.auto_renew_source if subscription.auto_renew else None
+        ),
+        "auto_renew_duration_days": (
+            subscription.auto_renew_duration_days if subscription.auto_renew else None
         ),
         "created_at": subscription.created_at.isoformat(),
         "needs_plan": False,
@@ -2101,6 +2119,18 @@ async def get_available_providers():
     return providers
 
 
+@router.get("/payments/display-rates")
+def get_payment_display_rates(
+    user_id: int = Depends(get_current_user),
+):
+    """Return non-authoritative currency rates for native-app presentation."""
+
+    del user_id
+    from src.modules.subscription.exchange_rates import get_display_rates
+
+    return get_display_rates()
+
+
 @router.get("/payments/balance")
 async def get_account_balance(
     user_id: int = Depends(get_current_user),
@@ -2175,6 +2205,161 @@ async def purchase_with_account_balance(
         "amount_usd": payment.amount_usd,
         "balance": get_balance_snapshot(db, user_id, limit=20),
     }
+
+
+@router.get("/payments/google-play/config")
+def get_google_play_config(
+    user_id: int = Depends(get_current_user),
+):
+    """Return only public checkout metadata plus this user's opaque binding."""
+
+    if not _operator_has_feature("payments"):
+        return {
+            "enabled": False,
+            "package_name": "",
+            "product_id": "",
+            "obfuscated_account_id": "",
+            "base_plans": {},
+        }
+
+    from src.modules.subscription.google_play_billing import (
+        GooglePlayConfigurationError,
+        get_config,
+        obfuscated_account_id,
+    )
+
+    try:
+        config = get_config(require_enabled=False)
+    except GooglePlayConfigurationError:
+        raise HTTPException(status_code=503, detail="Google Play billing configuration is invalid")
+    if not config.enabled:
+        return {
+            "enabled": False,
+            "package_name": config.package_name,
+            "product_id": config.product_id,
+            "obfuscated_account_id": "",
+            "base_plans": {},
+        }
+    return {
+        "enabled": True,
+        "package_name": config.package_name,
+        "product_id": config.product_id,
+        "obfuscated_account_id": obfuscated_account_id(user_id, config),
+        "base_plans": {
+            plan_id: {
+                "duration_days": plan.duration_days,
+                "plan_tier": plan.plan_tier,
+            }
+            for plan_id, plan in config.base_plans.items()
+        },
+    }
+
+
+@router.post("/payments/google-play/verify")
+async def verify_google_play_purchase(
+    data: GooglePlayVerifyRequest,
+    user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Verify, bind, grant, persist and acknowledge one Play subscription."""
+
+    if not _operator_has_feature("payments"):
+        raise HTTPException(status_code=403, detail="Google Play billing is not available for this service.")
+
+    from src.modules.subscription.google_play_billing import (
+        GooglePlayConfigurationError,
+        GooglePlayVerificationError,
+        acknowledge_purchase,
+        apply_verified_subscription,
+        get_config,
+        verify_purchase,
+    )
+
+    manager = SubscriptionManager(db)
+    user = manager.get_user_by_id(user_id)
+    if not user or user.is_banned or not user.is_active:
+        raise HTTPException(status_code=403, detail="Account restricted")
+    try:
+        config = get_config(require_enabled=True)
+        verified = await verify_purchase(
+            data.purchase_token,
+            expected_user_id=user_id,
+            config=config,
+        )
+        row = apply_verified_subscription(db, verified, user_id=user_id)
+        acknowledged = await acknowledge_purchase(verified, config)
+        if acknowledged and not row.acknowledged:
+            row.acknowledged = True
+            db.commit()
+        if verified.entitled:
+            await _sync_wg_after_payment(db, user_id, manager)
+    except GooglePlayConfigurationError as exc:
+        logger.error("Google Play billing configuration error: %s", exc)
+        raise HTTPException(status_code=503, detail="Google Play billing is temporarily unavailable")
+    except GooglePlayVerificationError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc))
+    except httpx.HTTPError:
+        db.rollback()
+        raise HTTPException(status_code=502, detail="Google Play could not be reached")
+
+    return {
+        "status": "active" if verified.entitled else "pending",
+        "subscription_state": verified.subscription_state,
+        "product_id": verified.product_id,
+        "base_plan_id": verified.base_plan_id,
+        "plan_tier": verified.plan_tier,
+        "expiry_time": verified.expiry_time.isoformat(),
+        "auto_renewing": verified.auto_renewing,
+        "acknowledged": acknowledged,
+    }
+
+
+@router.post("/webhooks/google-play/rtdn", status_code=204)
+async def google_play_rtdn(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Authenticated Pub/Sub push receiver for renewals and revocations."""
+
+    from src.modules.subscription.google_play_billing import (
+        GooglePlayConfigurationError,
+        GooglePlayVerificationError,
+        acknowledge_purchase,
+        apply_verified_subscription,
+        decode_rtdn,
+        get_config,
+        verify_pubsub_identity,
+        verify_rtdn_purchase,
+    )
+
+    try:
+        config = get_config(require_enabled=True)
+        await verify_pubsub_identity(request.headers.get("authorization", ""), config)
+        body = await request.json()
+        token = decode_rtdn(body, config)
+        resolved = await verify_rtdn_purchase(db, token, config=config)
+        # A brand-new, unlinked purchase is claimed by the authenticated app.
+        # Linked replacements and out-of-app resubscriptions are resolved here.
+        if resolved is None:
+            return Response(status_code=204)
+        verified, user_id = resolved
+        row = apply_verified_subscription(db, verified, user_id=user_id)
+        acknowledged = await acknowledge_purchase(verified, config)
+        if acknowledged and not row.acknowledged:
+            row.acknowledged = True
+            db.commit()
+        if verified.entitled:
+            await _sync_wg_after_payment(db, user_id, SubscriptionManager(db))
+    except GooglePlayVerificationError as exc:
+        db.rollback()
+        logger.warning("Rejected Google Play RTDN: %s", exc)
+        raise HTTPException(status_code=401, detail="Invalid Google Play notification")
+    except GooglePlayConfigurationError as exc:
+        db.rollback()
+        logger.error("Google Play RTDN configuration error: %s", exc)
+        raise HTTPException(status_code=503, detail="Google Play notifications are unavailable")
+    return Response(status_code=204)
 
 
 @router.get("/payments/check/{invoice_id}")
@@ -3508,11 +3693,11 @@ def validate_promo_client(
 
 @router.post("/subscription/auto-renew")
 def toggle_auto_renew(
-    data: dict,
+    data: AutoRenewRequest,
     user_id: int = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Keep automatic renewal fail-closed until payments are bound to it."""
+    """Enable or disable explicit balance-funded automatic renewal."""
 
     from src.modules.subscription.subscription_models import ClientPortalSubscription
     sub = db.query(ClientPortalSubscription).filter(
@@ -3521,22 +3706,48 @@ def toggle_auto_renew(
     if not sub:
         raise HTTPException(status_code=404, detail="No subscription found")
 
-    requested_enable = bool(data.get("auto_renew", False))
-    if sub.auto_renew or (sub.auto_renew_failures or 0):
+    if not data.auto_renew:
         sub.auto_renew = False
+        sub.auto_renew_source = None
+        sub.auto_renew_duration_days = None
+        sub.auto_renew_consent_at = None
         sub.auto_renew_failures = 0
         db.commit()
+        return {"message": "Automatic renewal is disabled", "auto_renew": False}
 
-    if requested_enable or not _AUTO_RENEWAL_RUNTIME_ENABLED:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Automatic renewal is temporarily unavailable. "
-                "Please renew the subscription manually."
-            ),
-        )
+    if not _AUTO_RENEWAL_RUNTIME_ENABLED:
+        raise HTTPException(status_code=503, detail="Automatic renewal is temporarily unavailable.")
+    if not (_operator_has_feature("auto_renewal") and _operator_has_feature("payments")):
+        raise HTTPException(status_code=403, detail="Automatic renewal is not available for this service.")
+    if sub.tier == "free" or sub.status != SubscriptionStatus.ACTIVE or sub.is_expired:
+        raise HTTPException(status_code=409, detail="An active paid subscription is required.")
+    if data.duration_days not in (30, 90, 365):
+        raise HTTPException(status_code=422, detail="Choose a 30, 90, or 365 day renewal period.")
 
-    return {"message": "Automatic renewal is disabled", "auto_renew": False}
+    # Validate that this plan actually offers the requested interval and has a
+    # positive server-authoritative price before recording consent.
+    manager = SubscriptionManager(db)
+    _quote_subscription_purchase(
+        db,
+        manager,
+        plan_tier=sub.tier,
+        duration_days=data.duration_days,
+        promo_code=None,
+    )
+
+    sub.auto_renew = True
+    sub.auto_renew_source = "balance"
+    sub.auto_renew_duration_days = data.duration_days
+    sub.auto_renew_consent_at = datetime.now(timezone.utc)
+    sub.auto_renew_failures = 0
+    db.commit()
+
+    return {
+        "message": "Automatic renewal will use your account balance",
+        "auto_renew": True,
+        "source": "balance",
+        "duration_days": data.duration_days,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════

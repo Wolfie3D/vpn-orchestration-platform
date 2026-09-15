@@ -157,20 +157,20 @@ class TestGraceOnSuspend:
         assert enforcement._load_first_free() is None   # never recorded when grace=0
 
 
-class TestFreeLocalQuota:
-    """FREE = up to 1 LOCAL wireguard + 1 LOCAL amneziawg on the install box.
+class TestCommunityLocalQuota:
+    """Community Edition = one LOCAL WireGuard or AmneziaWG server.
     Remote/agent servers and proxy protocols (hysteria2/tuic) are paid-only."""
 
     def _free_now(self, monkeypatch, set_tier):
         monkeypatch.setattr(enforcement, "_SUSPEND_GRACE_H", 0)  # suspend immediately
         set_tier(paid=False)
 
-    def test_keeps_one_local_of_each_protocol(self, db_session, set_tier, monkeypatch):
+    def test_keeps_only_the_oldest_eligible_local_protocol(self, db_session, set_tier, monkeypatch):
         self._free_now(monkeypatch, set_tier)
         _mk_server(db_session, "wg", "wireguard")
         _mk_server(db_session, "awg", "amneziawg")
         r = enforcement.reconcile(db_session)
-        assert r["suspended"] == 0   # two local, one per protocol → both kept
+        assert r["suspended"] == 1
 
     def test_suspends_remote_server_even_if_only_one(self, db_session, set_tier, monkeypatch):
         self._free_now(monkeypatch, set_tier)

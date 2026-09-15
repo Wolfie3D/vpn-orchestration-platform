@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Optional, Any
+from typing import Any, Optional
 
 from fastapi import APIRouter
 
@@ -28,6 +28,8 @@ OPTIONAL_FIELDS = {
     "author",
     "homepage",
     "frontend_chunks",   # list[str]: Vue chunk names to lazy-load on the admin
+    "operator_toggleable",  # bool: can be enabled/disabled in the admin UI
+    "default_enabled",      # bool: initial switch value before first operator choice
 }
 ALLOWED_FIELDS = REQUIRED_FIELDS | OPTIONAL_FIELDS
 
@@ -85,6 +87,10 @@ def load_manifest(plugin_dir: Path) -> dict:
         if not isinstance(chunks, list) or not all(isinstance(c, str) for c in chunks):
             raise PluginManifestError("'frontend_chunks' must be a list of strings")
 
+    for field_name in ("operator_toggleable", "default_enabled"):
+        if field_name in manifest and not isinstance(manifest[field_name], bool):
+            raise PluginManifestError(f"'{field_name}' must be a boolean")
+
     return manifest
 
 
@@ -130,6 +136,11 @@ class Plugin:
         the single feature this plugin requires.
         """
         return [self.requires_license_feature]
+
+    def get_admin_status(self) -> dict[str, Any]:
+        """Return non-secret runtime diagnostics for the Plugins screen."""
+
+        return {}
 
     def on_load(self) -> None:
         """Called once after the plugin is registered with the app.

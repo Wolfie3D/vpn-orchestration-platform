@@ -53,6 +53,10 @@ def _clear_rate_limiters():
 @pytest.fixture
 def app_with_db():
     """Create test app with in-memory SQLite, seeded data, and auth bypass."""
+    public_key_patch = patch(
+        "src.modules.license.manager._find_public_key", return_value=None
+    )
+    public_key_patch.start()
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -103,11 +107,16 @@ def app_with_db():
 
     Base.metadata.drop_all(bind=engine)
     engine.dispose()
+    public_key_patch.stop()
 
 
 @pytest.fixture
 def app_with_real_auth():
     """Create test app WITH real auth (no admin override) for auth flow tests."""
+    public_key_patch = patch(
+        "src.modules.license.manager._find_public_key", return_value=None
+    )
+    public_key_patch.start()
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -132,6 +141,7 @@ def app_with_real_auth():
 
     Base.metadata.drop_all(bind=engine)
     engine.dispose()
+    public_key_patch.stop()
 
 
 @pytest.fixture

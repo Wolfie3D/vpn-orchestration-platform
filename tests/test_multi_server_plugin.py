@@ -42,9 +42,9 @@ class TestMultiServerTiers:
     def test_free_lacks_multi_server(self):
         free = LICENSE_TIERS[LicenseType.FREE]
         assert "multi_server" not in free["features"]
-        # FREE is also limited to 1 server, which prevents the situation
-        # entirely at the limit-check layer
-        assert free["max_servers"] == 2   # FREE = 2 local servers (wireguard + amneziawg)
+        # Community Edition is limited to one local server at the limit-check
+        # layer, regardless of whether it is WireGuard or AmneziaWG.
+        assert free["max_servers"] == 1
 
     @pytest.mark.parametrize(
         "tier,has_feature",

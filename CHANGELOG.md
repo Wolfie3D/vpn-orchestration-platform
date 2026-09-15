@@ -4,6 +4,69 @@ All notable changes to Flirexa are documented here.
 
 ---
 
+## v2.3.3 — 2026-09-15
+
+### Added
+
+- Added an operator-controlled Google Play Billing plugin for Android
+  subscriptions, with server-authoritative purchase verification, renewal
+  lifecycle handling, and preserved billing history when disabled.
+- Added explicit balance-funded automatic renewal periods for eligible paid
+  customer portals, with transactional debits and idempotent renewal records.
+- Added cached display-currency rates for supported native clients while
+  keeping every authoritative quote, charge, balance, and receipt in USD.
+
+### Improved
+
+- Made built-in plugin activation persistent across updates and full
+  backup/restore, with separate licensed, configured, operator-enabled, and
+  effective states in the Plugins screen.
+- Kept Play-distributed Android builds on the Play purchase rail while
+  preserving separately configured hosted checkout methods for sideloaded
+  builds.
+- Extended backup verification to cover plugin state and the new subscription
+  attribution records.
+
+### Fixed
+
+- Made incomplete or disabled Google Play configuration fail closed without
+  deleting historical purchase or subscription records.
+- Prevented reused purchase tokens, mismatched products, account bindings, and
+  stale lifecycle events from granting or revoking the wrong entitlement.
+- Disabled balance renewal safely when funds, pricing, entitlement, or timing
+  checks fail, without creating a debit or extending service.
+
+---
+
+## v2.3.2 — 2026-09-12
+
+### Added
+
+- Added an owner-operated Enterprise panel-migration workflow for preparing a
+  clean replacement server, performing a final verified data sync, moving the
+  licence atomically, and retaining a seven-hour rollback window.
+- Added localized reminders during the final three days of a seven-day
+  Enterprise trial.
+
+### Improved
+
+- Integrated panel migration into the standard Settings screen on desktop and
+  mobile, with the previous direct route retained as a compatibility redirect.
+- Made the effective licence state refresh during normal panel use so blocked,
+  expired, or revoked paid access is reflected without requiring a restart.
+
+### Fixed
+
+- Restricted migration to the server-confirmed installation owner with an
+  active, non-trial Enterprise licence; delegated managers and lower tiers fail
+  closed in both the interface and API.
+- Serialized cutover and rollback transitions so retries cannot create two
+  active licence owners or two writable panels.
+- Kept the source panel fenced during an uncertain handoff and exposed recovery
+  only after the licensing authority confirms ownership has returned.
+
+---
+
 ## v2.2.117 — 2026-08-20
 
 ### Added

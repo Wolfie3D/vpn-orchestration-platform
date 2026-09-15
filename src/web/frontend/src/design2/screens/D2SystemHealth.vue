@@ -86,12 +86,13 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { translateGlobal } from '../../i18n/translate'
 import { healthApi } from '../../api'
 import { formatDate } from '../../utils'
 import { useD2Ui } from '../../stores/d2ui'
 
 const { t } = useI18n({ useScope: 'global' })
-function tr(k) { try { const v = t(k); return v === k ? '' : v } catch (_) { return '' } }
+function tr(k) { try { return translateGlobal(k) } catch (_) { return '' } }
 const ui = useD2Ui()
 const health = ref(null)
 const issues = ref([])

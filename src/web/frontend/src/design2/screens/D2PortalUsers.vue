@@ -324,6 +324,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { d2confirm } from '../ui/confirm'
 import { useI18n } from 'vue-i18n'
+import { translateGlobal } from '../../i18n/translate'
 import { portalUsersApi } from '../../api'
 import { formatBytes, formatDate } from '../../utils'
 import { useD2Ui } from '../../stores/d2ui'
@@ -333,7 +334,7 @@ import D2Field from '../ui/D2Field.vue'
 import D2Select from '../ui/D2Select.vue'
 
 const { t } = useI18n({ useScope: 'global' })
-function tr(k, p) { try { const v = t(k, p || {}); return v === k ? '' : v } catch (_) { return '' } }
+function tr(k, p) { try { return translateGlobal(k, p || {}) } catch (_) { return '' } }
 const ui = useD2Ui()
 
 const users = ref([])
@@ -695,7 +696,7 @@ const detailPayments = computed(() => (detail.value?.payments || []).map(p => {
 
 onMounted(() => {
   ui.set({
-    title: tr('nav.portal') || 'Portal users',
+    title: tr('nav.portal') || 'Customers',
     search: true,
     searchPh: tr('portalUsers.search') || 'Search users…',
     onSearch: v => { search.value = v; reload() },

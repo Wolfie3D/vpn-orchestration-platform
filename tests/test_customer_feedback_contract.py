@@ -231,6 +231,32 @@ def test_paid_panels_hide_donation_automatically():
     assert "setTimeout(() => { donateOpen.value = true }" not in shell
 
 
+def test_design2_settings_hide_donation_wallets_and_present_license_features_as_cards():
+    settings = _read("src/web/frontend/src/design2/screens/D2Settings.vue")
+
+    assert "isSetDonate" not in settings
+    assert "loadDonation" not in settings
+    assert "saveDonation" not in settings
+    assert "d2-license-desktop-features" in settings
+    assert "d2-license-feature-list-desktop" in settings
+    assert "featureLabel(f)" in settings
+    assert "custom_branding:'Собственный брендинг'" in settings
+
+
+def test_clients_expiring_filter_is_localized_in_every_supported_design2_language():
+    clients = _read("src/web/frontend/src/design2/screens/D2Clients.vue")
+
+    assert "tr('clients.expiringSoon') || 'Expiring soon'" in clients
+    translations = {
+        "ru": '"expiringSoon": "Скоро истекает"',
+        "de": '"expiringSoon": "Läuft bald ab"',
+        "fr": '"expiringSoon": "Expire bientôt"',
+        "es": '"expiringSoon": "Caduca pronto"',
+    }
+    for language, expected in translations.items():
+        assert expected in _read(f"src/web/frontend/src/i18n/design2/{language}.js")
+
+
 def test_enterprise_has_independent_admin_and_portal_github_controls():
     shell = _read("src/web/frontend/src/design2/shell/D2Shell.vue")
     store = _read("src/web/frontend/src/stores/branding.js")

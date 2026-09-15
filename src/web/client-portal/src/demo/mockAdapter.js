@@ -15,7 +15,7 @@ const subscription = {
   is_active: true, max_devices: 5, devices_used: 2, over_device_limit: false,
   excess_devices: 0, traffic_limit_gb: 250, traffic_used_gb: 153.4,
   traffic_remaining_gb: 96.6, traffic_percentage: 61.36, bandwidth_limit_mbps: 300,
-  price_monthly_usd: 12, expiry_date: new Date(now + 25 * 86400000).toISOString(),
+  price_monthly_usd: 4, expiry_date: new Date(now + 25 * 86400000).toISOString(),
   days_remaining: 25, auto_renew: false, created_at: new Date(now - 160 * 86400000).toISOString(),
   needs_plan: false,
 }
@@ -88,9 +88,9 @@ export function createPortalDemoAdapter() {
     if (path === '/client-portal/features') return response(config, { features, portal_mode: 'simple' })
     if (path === '/client-portal/subscription') return response(config, subscription)
     if (path === '/client-portal/subscription/plans') return response(config, [
-      { tier: 'basic', name: 'Essential', description: 'For one personal device', max_devices: 1, traffic_limit_gb: 100, bandwidth_limit_mbps: 100, price_monthly_usd: 4, price_quarterly_usd: 11, price_yearly_usd: 39, pricing_tiers: [] },
-      { tier: 'premium', name: 'Premium', description: 'Every location and advanced protection', max_devices: 5, traffic_limit_gb: 250, bandwidth_limit_mbps: 300, price_monthly_usd: 12, price_quarterly_usd: 32, price_yearly_usd: 99, pricing_tiers: [] },
-      { tier: 'business', name: 'Team', description: 'Shared access for small teams', max_devices: 15, traffic_limit_gb: 0, bandwidth_limit_mbps: 0, price_monthly_usd: 29, price_quarterly_usd: 79, price_yearly_usd: 249, pricing_tiers: [] },
+      { tier: 'essential', name: 'Essential', description: 'For one personal device', max_devices: 1, traffic_limit_gb: 100, bandwidth_limit_mbps: 100, price_monthly_usd: 3, price_quarterly_usd: 8, price_yearly_usd: 30, pricing_tiers: [] },
+      { tier: 'premium', name: 'Premium', description: 'Every location and advanced protection', max_devices: 5, traffic_limit_gb: 250, bandwidth_limit_mbps: 300, price_monthly_usd: 4, price_quarterly_usd: 11, price_yearly_usd: 40, pricing_tiers: [] },
+      { tier: 'team', name: 'Team', description: 'Shared access for small teams', max_devices: 15, traffic_limit_gb: 0, bandwidth_limit_mbps: 0, price_monthly_usd: 7, price_quarterly_usd: 20, price_yearly_usd: 70, pricing_tiers: [] },
     ])
     if (url.startsWith('/client-portal/dashboard/traffic-series')) {
       const series = Array.from({ length: 14 }, (_, i) => ({ date: new Date(now - (13 - i) * 86400000).toISOString().slice(0, 10), rx_gb: 5 + i * .7, tx_gb: 1.3 + i * .2 }))
@@ -126,9 +126,9 @@ export function createPortalDemoAdapter() {
     if (/\/client-portal\/wireguard\/qrcode\//.test(url)) return response(config, demoQrBlob())
     if (path === '/client-portal/referral') return response(config, { referral_code: 'FLIREXA-DEMO', referral_count: 8, paid_referrals: 3 })
     if (path === '/client-portal/payments/history') return response(config, [
-      { id: 1, invoice_id: 'INV-000701', amount_usd: 12, status: 'completed', payment_method: 'stripe', purpose: 'subscription', subscription_tier: 'premium', duration_days: 30, created_at: isoAgo(5000) },
-      { id: 2, invoice_id: 'INV-000648', amount_usd: 12, status: 'completed', payment_method: 'paypal', purpose: 'subscription', subscription_tier: 'premium', duration_days: 30, created_at: isoAgo(48000) },
-      { id: 3, invoice_id: 'INV-000601', amount_usd: 25, status: 'completed', payment_method: 'account_balance', purpose: 'balance_topup', created_at: isoAgo(92000) },
+      { id: 1, invoice_id: 'INV-000701', amount_usd: 4, status: 'completed', payment_method: 'stripe', purpose: 'subscription', subscription_tier: 'premium', duration_days: 30, created_at: isoAgo(5000) },
+      { id: 2, invoice_id: 'INV-000648', amount_usd: 4, status: 'completed', payment_method: 'paypal', purpose: 'subscription', subscription_tier: 'premium', duration_days: 30, created_at: isoAgo(48000) },
+      { id: 3, invoice_id: 'INV-000601', amount_usd: 100, status: 'completed', payment_method: 'account_balance', purpose: 'balance_topup', created_at: isoAgo(92000) },
     ])
     if (path === '/client-portal/payments/providers') return response(config, [
       { id: 'stripe', display_name: 'Card', type: 'fiat', configured: true },
@@ -136,15 +136,15 @@ export function createPortalDemoAdapter() {
       { id: 'nowpayments', display_name: 'Crypto', type: 'crypto', configured: true },
     ])
     if (path === '/client-portal/payments/balance' && method === 'get') return response(config, { enabled: true, currency: 'USD', available_minor: balanceAvailableMinor, transactions: [
-      { id: 1, type: 'topup', amount_minor: 2500, created_at: isoAgo(2900) },
-      { id: 2, type: 'subscription_purchase', amount_minor: -1200, created_at: isoAgo(1600) },
+      { id: 1, type: 'topup', amount_minor: 10400, created_at: isoAgo(2900) },
+      { id: 2, type: 'subscription_purchase', amount_minor: -400, created_at: isoAgo(1600) },
     ] })
     if (path === '/client-portal/payments/create-invoice' && method === 'post') {
       const body = json(config.data)
       const invoiceId = `DEMO-${++invoiceSequence}`
       return response(config, {
         invoice_id: invoiceId,
-        amount_usd: Number(body.topup_amount_usd || (body.plan_tier === 'business' ? 29 : body.plan_tier === 'premium' ? 12 : 4)),
+        amount_usd: Number(body.topup_amount_usd || (body.plan_tier === 'team' ? 7 : body.plan_tier === 'premium' ? 4 : 3)),
         currency: String(body.currency || 'USD').toUpperCase(),
         provider: body.provider || 'stripe',
         status: 'pending',
@@ -157,7 +157,7 @@ export function createPortalDemoAdapter() {
       return response(config, { invoice_id: paymentCheck[1], status: 'completed', paid: true })
     }
     if (path === '/client-portal/payments/balance/purchase' && method === 'post') {
-      balanceAvailableMinor = Math.max(0, balanceAvailableMinor - 1200)
+      balanceAvailableMinor = Math.max(0, balanceAvailableMinor - 400)
       return response(config, { status: 'completed', balance: { enabled: true, currency: 'USD', available_minor: balanceAvailableMinor } })
     }
     if (path === '/client-portal/promo/validate' && method === 'post') {

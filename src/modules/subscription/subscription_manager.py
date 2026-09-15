@@ -501,6 +501,10 @@ class SubscriptionManager:
             return False
 
         subscription.auto_renew = False
+        subscription.auto_renew_source = None
+        subscription.auto_renew_duration_days = None
+        subscription.auto_renew_consent_at = None
+        subscription.auto_renew_failures = 0
         subscription.status = SubscriptionStatus.CANCELLED
 
         self.db.commit()
@@ -855,6 +859,10 @@ class SubscriptionManager:
                 )
                 self.db.rollback()
                 return False
+
+        if subscription:
+            subscription.billing_source = payment.provider_name or "payment"
+            subscription.billing_reference = payment.invoice_id
 
         self.db.commit()
 

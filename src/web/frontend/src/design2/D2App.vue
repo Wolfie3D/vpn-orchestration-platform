@@ -20,6 +20,7 @@
 <script setup>
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { translateGlobal } from '../i18n/translate'
 import './tokens.css'
 import './base.css'
 import './handoff.css'
@@ -30,7 +31,7 @@ import D2Button from './ui/D2Button.vue'
 import { confirmState, resolveConfirm } from './ui/confirm'
 const sprite = computed(() => rawSprite.replace(/<\?xml[^>]*\?>/, ''))
 const { t } = useI18n({ useScope: 'global' })
-function tr(k, p) { try { const s = t(k, p || {}); return s === k ? '' : s } catch (_) { return '' } }
+function tr(k, p) { try { return translateGlobal(k, p || {}) } catch (_) { return '' } }
 </script>
 
 <style scoped>

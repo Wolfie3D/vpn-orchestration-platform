@@ -4,6 +4,7 @@ import hashlib
 import json
 import tarfile
 from pathlib import Path
+from types import SimpleNamespace
 
 from src.modules import backup_manager
 from src.modules.backup_manager import BackupManager, _is_new_format
@@ -111,3 +112,45 @@ def test_incompatible_major_version_is_rejected_during_preflight(tmp_path):
 
     assert result["ok"] is False
     assert "Incompatible backup version" in " ".join(result["errors"])
+
+
+def test_restored_localhost_database_password_is_synchronised(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "DATABASE_URL=postgresql://vpnmanager:restored-secret@localhost:5432/vpnmanager\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(backup_manager.subprocess, "run", fake_run)
+    BackupManager(object(), backup_dir=str(tmp_path))._sync_local_database_password_from_env(
+        str(env_file)
+    )
+
+    assert calls
+    assert calls[0][:4] == ["sudo", "-u", "postgres", "psql"]
+    assert "ALTER ROLE" in calls[0][-1]
+
+
+def test_external_database_password_is_not_changed(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "DATABASE_URL=postgresql://vpnmanager:secret@db.example.test:5432/vpnmanager\n",
+        encoding="utf-8",
+    )
+    calls = []
+    monkeypatch.setattr(
+        backup_manager.subprocess,
+        "run",
+        lambda command, **kwargs: calls.append(command),
+    )
+
+    BackupManager(object(), backup_dir=str(tmp_path))._sync_local_database_password_from_env(
+        str(env_file)
+    )
+
+    assert calls == []

@@ -116,6 +116,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { d2confirm } from '../ui/confirm'
 import { useI18n } from 'vue-i18n'
+import { translateGlobal } from '../../i18n/translate'
 import { tariffsApi } from '../../api'
 import { useD2Ui } from '../../stores/d2ui'
 import D2Modal from '../ui/D2Modal.vue'
@@ -126,7 +127,7 @@ import D2HelpTip from '../ui/D2HelpTip.vue'
 import D2MobileSheet from '../ui/D2MobileSheet.vue'
 
 const { t } = useI18n({ useScope: 'global' })
-function tr(k) { try { const v = t(k); return v === k ? '' : v } catch (_) { return '' } }
+function tr(k) { try { return translateGlobal(k) } catch (_) { return '' } }
 const ui = useD2Ui()
 const tariffs = ref([]); const loading = ref(false)
 const mobilePlan = ref(null)
@@ -156,7 +157,7 @@ function mobilePlanAction(action) {
 const showSimulate = ref(false); const simulateValue = ref(''); const simulateBusy = ref(false); const simulateError = ref('')
 function openSimulate() { simulateValue.value = ''; simulateError.value = ''; showSimulate.value = true }
 async function submitSimulate() { if (!simulateValue.value) return; simulateBusy.value = true; simulateError.value = ''; try { await tariffsApi.simulatePayment(simulateValue.value.trim()); showSimulate.value = false } catch (e) { simulateError.value = e.response?.data?.detail || e.message } finally { simulateBusy.value = false } }
-onMounted(() => { ui.set({ title: tr('nav.subscriptions') || 'Tariffs', primary: { label: tr('subscriptions.createTariff') || 'Create tariff', onClick: openCreate } }); load() })
+onMounted(() => { ui.set({ title: tr('nav.subscriptions') || 'Plans & Subscriptions', primary: { label: tr('subscriptions.createTariff') || 'Create tariff', onClick: openCreate } }); load() })
 </script>
 
 <style scoped>

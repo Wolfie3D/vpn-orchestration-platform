@@ -20,11 +20,14 @@ directory is silently skipped — FREE installs see no traces.
 
 from .base import Plugin, PluginLoadError, PluginManifestError
 from .loader import PluginLoader, PluginRecord
+from .state import is_plugin_enabled, set_plugin_enabled
 
 __all__ = [
     "Plugin",
     "PluginLoadError",
-    "PluginManifestError",
     "PluginLoader",
+    "PluginManifestError",
     "PluginRecord",
+    "is_plugin_enabled",
+    "set_plugin_enabled",
 ]

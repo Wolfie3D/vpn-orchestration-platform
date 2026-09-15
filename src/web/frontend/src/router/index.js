@@ -106,6 +106,11 @@ const routes = [
     component: D2_SCREENS.Backup,
   },
   {
+    path: '/panel-migration',
+    name: 'PanelMigration',
+    redirect: { path: '/settings', query: { section: 'migration' } },
+  },
+  {
     path: '/updates',
     name: 'Updates',
     component: D2_SCREENS.Updates,

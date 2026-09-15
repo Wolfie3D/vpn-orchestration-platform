@@ -17,7 +17,7 @@
     <div class="d2-settings-layout" :style="{ display:'grid', gridTemplateColumns:'220px 1fr', gap:'18px', alignItems:'start' }">
       <!-- LEFT TAB RAIL -->
       <div class="d2-settings-rail" style="background:var(--panel);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);padding:7px;position:sticky;top:84px">
-        <button v-for="st in settingsTabs" :key="st.key" @click="st.on"
+        <button v-for="st in settingsTabs" :key="st.key" @click="selectSettingsTab(st)"
           :style="{ display:'flex', alignItems:'center', gap:'10px', width:'100%', padding:'9px 11px', border:'none', borderRadius:'9px', background:st.bg, color:st.color, font:'inherit', fontSize:'13px', fontWeight:st.weight, cursor:'pointer', textAlign:'left' }">
           <span style="display:flex;flex:none" v-html="st.icon"></span>{{ st.label }}
         </button>
@@ -59,15 +59,28 @@
           </div>
 
           <div class="d2-license-desktop" style="background:var(--panel);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);padding:20px 22px">
-            <div style="font-weight:650;font-size:15px;margin-bottom:16px">{{ tr('settings.license') || 'License' }}</div>
-            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:11px;margin-bottom:16px">
-              <div style="padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--panel-2)"><div style="font-size:11px;color:var(--text-3)">{{ tr('settings.licenseTier') || 'Tier' }}</div><div style="font-size:16px;font-weight:680;margin-top:3px">{{ licTier }}</div></div>
-              <div style="padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--panel-2)"><div style="font-size:11px;color:var(--text-3)">{{ tr('settings.maxClients') || 'Max clients' }}</div><div style="font-size:16px;font-weight:680;font-family:'JetBrains Mono',monospace;margin-top:3px">{{ licMaxClients }}</div></div>
-              <div style="padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--panel-2)"><div style="font-size:11px;color:var(--text-3)">{{ tr('settings.maxServers') || 'Max servers' }}</div><div style="font-size:16px;font-weight:680;font-family:'JetBrains Mono',monospace;margin-top:3px">{{ licMaxServers }}</div></div>
-              <div style="padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--panel-2)"><div style="font-size:11px;color:var(--text-3)">{{ tr('settings.expires') || 'Days left' }}</div><div style="font-size:16px;font-weight:680;font-family:'JetBrains Mono',monospace;margin-top:3px;color:var(--green)">{{ licDays }}</div></div>
+            <div class="d2-license-desktop-hero">
+              <span class="d2-license-desktop-icon" v-html="ICON.license"></span>
+              <div class="d2-license-desktop-title">
+                <small>{{ tr('settings.licenseType') || 'License type' }}</small>
+                <strong>{{ licTier }}</strong>
+              </div>
+              <span class="d2-license-status" :class="{ active:licensed }"><i></i>{{ licensed ? (tr('settings.active') || 'Active') : (tr('settings.inactive') || 'Inactive') }}</span>
+              <div class="d2-license-desktop-metrics">
+                <div><small>{{ tr('settings.clients') || 'Clients' }}</small><strong>{{ licClientsUsed }} / {{ licMaxClients }}</strong></div>
+                <div><small>{{ tr('settings.servers') || 'Servers' }}</small><strong>{{ licServersUsed }} / {{ licMaxServers }}</strong></div>
+                <div><small>{{ tr('settings.validity') || 'Validity' }}</small><strong>{{ licDays }}</strong></div>
+              </div>
             </div>
-            <div v-if="licFeatures.length" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px">
-              <span v-for="f in licFeatures" :key="f" style="font-size:11px;font-weight:600;padding:3px 9px;border-radius:7px;color:var(--accent);background:var(--accent-soft)">{{ f }}</span>
+            <div class="d2-license-desktop-features">
+              <div class="d2-license-desktop-features-head">
+                <div><strong>{{ tr('settings.includedFeatures') || 'Included features' }}</strong><small>{{ tr('settings.includedFeaturesHint') || 'Everything currently available for this installation' }}</small></div>
+                <span>{{ licFeatures.length }}</span>
+              </div>
+              <div v-if="licFeatures.length" class="d2-license-feature-list d2-license-feature-list-desktop">
+                <div v-for="f in licFeatures" :key="f"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12l4 4L19 7" /></svg><span>{{ featureLabel(f) }}</span></div>
+              </div>
+              <div v-else class="d2-license-sheet-empty">{{ tr('settings.noAdditionalFeatures') || 'No additional features are listed for this license.' }}</div>
             </div>
             <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:16px">
               <div><div style="display:flex;justify-content:space-between;font-size:11.5px;margin-bottom:4px"><span style="color:var(--text-3)">{{ tr('settings.clients') || 'Clients' }}</span><span style="font-family:'JetBrains Mono',monospace;color:var(--text-2)">{{ licClientsUsed }} / {{ licMaxClients }}</span></div><div style="height:6px;border-radius:4px;background:var(--panel-3);overflow:hidden"><div :style="{ height:'100%', borderRadius:'4px', background:'var(--accent)', width:licClientsPct }"></div></div></div>
@@ -444,28 +457,6 @@
           <div v-if="msg.ch" style="font-size:12.5px;color:var(--green);margin-top:12px">{{ msg.ch }}</div>
         </div>
 
-        <!-- ================= DONATE WALLETS ================= -->
-        <div v-if="isSetDonate" style="background:var(--panel);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);padding:20px 22px">
-          <div style="font-weight:650;font-size:15px;margin-bottom:4px">{{ tr('settings.donateWallets') || 'Donation wallets' }}</div>
-          <div style="font-size:12.5px;color:var(--text-2);margin-bottom:18px">{{ tr('settings.donateWalletsSub') || 'Addresses shown in the “Donate” modal.' }}</div>
-          <div style="display:flex;flex-direction:column;gap:14px">
-            <div><label style="display:block;font-size:12.5px;font-weight:550;margin-bottom:7px">Bitcoin (BTC)</label><input :value="donate.btc" @input="donate.btc = $event.target.value" style="width:100%;height:42px;border:1px solid var(--border-strong);background:var(--panel-2);color:var(--text);border-radius:10px;padding:0 13px;font-family:'JetBrains Mono',monospace;font-size:12.5px;outline:none" @focus="onFocus" @blur="onBlur"></div>
-            <div><label style="display:block;font-size:12.5px;font-weight:550;margin-bottom:7px">Ethereum / USDT (ERC-20)</label><input :value="donate.eth" @input="donate.eth = $event.target.value" style="width:100%;height:42px;border:1px solid var(--border-strong);background:var(--panel-2);color:var(--text);border-radius:10px;padding:0 13px;font-family:'JetBrains Mono',monospace;font-size:12.5px;outline:none" @focus="onFocus" @blur="onBlur"></div>
-            <div><label style="display:block;font-size:12.5px;font-weight:550;margin-bottom:7px">TON</label><input :value="donate.ton" @input="donate.ton = $event.target.value" style="width:100%;height:42px;border:1px solid var(--border-strong);background:var(--panel-2);color:var(--text);border-radius:10px;padding:0 13px;font-family:'JetBrains Mono',monospace;font-size:12.5px;outline:none" @focus="onFocus" @blur="onBlur"></div>
-            <div><label style="display:block;font-size:12.5px;font-weight:550;margin-bottom:7px">USDT (TRC-20)</label><input :value="donate.trc" @input="donate.trc = $event.target.value" style="width:100%;height:42px;border:1px solid var(--border-strong);background:var(--panel-2);color:var(--text);border-radius:10px;padding:0 13px;font-family:'JetBrains Mono',monospace;font-size:12.5px;outline:none" @focus="onFocus" @blur="onBlur"></div>
-            <div><label style="display:block;font-size:12.5px;font-weight:550;margin-bottom:7px">USDC (ERC-20)</label><input :value="donate.usdc" @input="donate.usdc = $event.target.value" style="width:100%;height:42px;border:1px solid var(--border-strong);background:var(--panel-2);color:var(--text);border-radius:10px;padding:0 13px;font-family:'JetBrains Mono',monospace;font-size:12.5px;outline:none" @focus="onFocus" @blur="onBlur"></div>
-          </div>
-          <div style="margin-top:16px"><label style="display:block;font-size:12.5px;font-weight:550;margin-bottom:7px">{{ tr('settings.donateCardUrl') || 'Card donation link (Paylio)' }}</label><input :value="donate.card_url" @input="donate.card_url = $event.target.value" placeholder="https://…/checkout/…" style="width:100%;height:42px;border:1px solid var(--border-strong);background:var(--panel-2);color:var(--text);border-radius:10px;padding:0 13px;font-family:'JetBrains Mono',monospace;font-size:12.5px;outline:none" @focus="onFocus" @blur="onBlur"><div style="font-size:11.5px;color:var(--text-3);margin-top:5px">{{ tr('settings.donateCardUrlSub') || 'Paylio hosted-checkout link, settles to your payout wallet. Shown as “Pay by card” in the Donate modal.' }}</div></div>
-          <div style="display:flex;align-items:flex-start;gap:11px;margin-top:16px;padding:13px 14px;background:var(--panel-2);border:1px solid var(--border);border-radius:11px">
-            <button @click="licensed && (donate.hidden = !donate.hidden)" :disabled="!licensed" :style="{ position:'relative', width:'38px', height:'22px', borderRadius:'20px', border:'none', cursor: licensed ? 'pointer' : 'not-allowed', background: donate.hidden ? 'var(--accent)' : 'var(--border-strong)', opacity: licensed ? 1 : .5, flex:'none', marginTop:'1px' }"><span :style="{ position:'absolute', top:'2px', left: donate.hidden ? '18px' : '2px', width:'18px', height:'18px', borderRadius:'50%', background:'#fff', transition:'left .15s' }"></span></button>
-            <div style="min-width:0"><div style="font-size:13px;font-weight:550;color:var(--text)">{{ tr('settings.hideDonate') || 'Hide the Support button' }}</div><div style="font-size:11.5px;color:var(--text-3);margin-top:3px;line-height:1.45">{{ licensed ? (tr('settings.hideDonateOn') || 'Removes the Donate button across the panel.') : (tr('settings.hideDonateGated') || 'Available once the panel is licensed — buying a license already supports the project.') }}</div></div>
-          </div>
-          <div style="display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:18px">
-            <span v-if="msg.dn" style="font-size:12.5px;color:var(--green)">{{ msg.dn }}</span>
-            <button @click="saveDonateWallets" style="height:40px;padding:0 18px;border:none;background:var(--accent);color:#fff;border-radius:10px;font:inherit;font-size:13px;font-weight:600;cursor:pointer">{{ tr('common.save') || 'Save' }}</button>
-          </div>
-        </div>
-
         <!-- ================= INTERFACE / DESIGN ================= -->
         <template v-if="isSetInterface">
           <!-- theme -->
@@ -480,6 +471,9 @@
           </div>
 
         </template>
+
+        <!-- ================= WHOLE-PANEL MIGRATION ================= -->
+        <D2PanelMigration v-if="isSetMigration" embedded />
 
       </div>
     </div>
@@ -544,19 +538,26 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { d2confirm } from '../ui/confirm'
 import { useI18n } from 'vue-i18n'
-import { systemApi } from '../../api'
+import { useRoute, useRouter } from 'vue-router'
+import { translateGlobal } from '../../i18n/translate'
+import { authApi, systemApi } from '../../api'
 import { useSystemStore } from '../../stores/system'
 import { useBrandingStore } from '../../stores/branding'
+import { useLicenseStore } from '../../stores/license'
 import { useD2Ui } from '../../stores/d2ui'
 import D2HelpTip from '../ui/D2HelpTip.vue'
 import D2BrandingPreview from '../ui/D2BrandingPreview.vue'
 import D2MobileSheet from '../ui/D2MobileSheet.vue'
+import D2PanelMigration from './D2PanelMigration.vue'
 
-const { t } = useI18n({ useScope: 'global' })
-function tr(k) { try { const v = t(k); return v === k ? '' : v } catch (_) { return '' } }
+const { t, locale } = useI18n({ useScope: 'global' })
+const route = useRoute()
+const router = useRouter()
+const licenseStore = useLicenseStore()
+function tr(k) { try { return translateGlobal(k) } catch (_) { return '' } }
 
 const system = useSystemStore()
 const branding = useBrandingStore()
@@ -605,9 +606,21 @@ const isSetLimits = computed(() => active.value === 'limits')
 const isSetWeb = computed(() => active.value === 'web')
 const isSetTools = computed(() => active.value === 'tools')
 const isSetBranding = computed(() => active.value === 'branding')
-const isSetDonate = computed(() => active.value === 'donate')
 const isSetUpdates = computed(() => active.value === 'updates')
 const isSetInterface = computed(() => active.value === 'interface')
+
+const installationOwner = ref(false)
+const migrationAccessLoaded = ref(false)
+const canUsePanelMigration = computed(() => (
+  migrationAccessLoaded.value
+  && installationOwner.value
+  && licenseStore.loaded
+  && !licenseStore.blocked
+  && !licenseStore.isTrial
+  && String(licenseStore.plan || licenseStore.tier || '').toLowerCase() === 'enterprise'
+  && licenseStore.has('server_migration')
+))
+const isSetMigration = computed(() => active.value === 'migration' && canUsePanelMigration.value)
 
 const ICON = {
   license: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M15 7a4 4 0 11-8 0 4 4 0 018 0z"></path><path d="M11 11l-6 6v3h3l6-6"></path></svg>',
@@ -619,8 +632,8 @@ const ICON = {
   limits: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"></path></svg>',
   web: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3a15 15 0 010 18M12 3a15 15 0 000 18"></path></svg>',
   tools: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M14.7 6.3a4 4 0 00-5.4 5.4L3 18v3h3l6.3-6.3a4 4 0 005.4-5.4l-2.8 2.8-2.2-.6-.6-2.2z"></path></svg>',
+  migration: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="2"></rect><rect x="3" y="14" width="18" height="6" rx="2"></rect><path d="M7 7h.01M7 17h.01M14 7h4M14 17h4"></path></svg>',
   branding: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 2l2.9 6.3L22 9.3l-5 4.8 1.2 6.9L12 17.8 5.8 21l1.2-6.9-5-4.8 7.1-1z"></path></svg>',
-  donate: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A3.5 3.5 0 0 0 12 5.5 3.5 3.5 0 0 0 2 8.5c0 2.29 1.51 4.04 3 5.5l7 7z"></path></svg>',
   updates: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M21 12a9 9 0 11-3-6.7L21 8"></path><path d="M21 3v5h-5"></path></svg>',
   interface: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="13.5" cy="6.5" r="2.5"></circle><circle cx="19" cy="13" r="2"></circle><path d="M12 22a10 10 0 110-20c5 0 8 3 8 6 0 2-2 3-4 3h-2a2 2 0 00-2 3c0 1 1 2 1 3a2 2 0 01-2 2z"></path></svg>',
 }
@@ -634,11 +647,12 @@ const settingsTabs = computed(() => [
   { key: 'limits', label: tr('settings.deviceLimitsTitle') || 'Limits' },
   { key: 'web', label: tr('common.webAccessTitle') || 'Web access' },
   { key: 'tools', label: tr('settings.systemTools') || 'System tools' },
+  { key: 'migration', label: tr('nav.migration') || 'Move panel', feature: 'server_migration', tier: 'enterprise', enterpriseOnly: true },
   { key: 'branding', label: tr('settings.branding') || 'Branding', feature: 'white_label', tier: 'enterprise' },
-  { key: 'donate', label: tr('settings.donateWallets') || 'Donation wallets' },
   { key: 'updates', label: tr('updates.channel') || 'Updates' },
   { key: 'interface', label: tr('settings.interface') || 'Interface' },
-].map(s => ({
+].filter(s => !s.enterpriseOnly || canUsePanelMigration.value)
+  .filter(s => !licenseStore.blocked || ['license', 'updates'].includes(s.key)).map(s => ({
   ...s,
   icon: ICON[s.key] || '',
   bg: active.value === s.key ? 'var(--accent-soft)' : 'transparent',
@@ -649,13 +663,19 @@ const settingsTabs = computed(() => [
       requestUpgrade(s.feature, s.tier)
       return
     }
-    active.value = s.key
+    setActiveSettingsSection(s.key)
   },
 })))
 const activeSettingsTab = computed(() => settingsTabs.value.find(item => item.key === active.value) || settingsTabs.value[0] || { label: '', icon: '' })
 
 // ═══════════════ LICENSE ═══════════════
 const license = reactive({ type: '', tier: '', max_clients: null, max_servers: null, days_remaining: null, features: [], current_clients: 0, current_servers: 0, server_id: '', owner: '', newKey: '', replayCode: '' })
+watch(() => licenseStore.status, (status) => {
+  if (status && Object.keys(status).length) Object.assign(license, status)
+}, { deep: false })
+watch(() => licenseStore.blocked, (blocked) => {
+  if (blocked && !['license', 'updates'].includes(active.value)) active.value = 'license'
+})
 function hasLicenseFeature(feature) {
   return Array.isArray(license.features) && license.features.includes(feature)
 }
@@ -667,20 +687,36 @@ const licMaxServers = computed(() => license.max_servers == null ? '—' : (lice
 const licDays = computed(() => license.days_remaining != null ? license.days_remaining + 'd' : (tr('settings.permanent') || 'Permanent'))
 const licFeatures = computed(() => Array.isArray(license.features) ? license.features : [])
 const FEATURE_LABELS = {
-  app_integration: 'Client applications',
-  auto_backup: 'Automatic backups',
-  branding: 'Custom branding',
-  corporate_vpn: 'Corporate VPN',
-  custom_domain: 'Custom domains',
-  email_branding: 'Branded email',
-  manager_rbac: 'Manager roles',
-  multi_server: 'Multi-server management',
-  priority_support: 'Priority support',
-  white_label: 'Full white label',
+  en: {
+    wireguard:'WireGuard', amneziawg:'AmneziaWG', proxy_protocols:'Advanced VPN protocols', client_portal:'Client portal', telegram_bots:'Telegram bots',
+    nowpayments:'Crypto payments', payments:'Payment providers', multi_server:'Multi-server management', mikrotik_adapter:'MikroTik integration', traffic_rules:'Traffic rules',
+    android_app:'Android application', white_label_basic:'Basic branding', white_label:'Full white label', auto_backup:'Automatic backups', corporate_vpn:'Corporate VPN',
+    manager_rbac:'Manager roles and permissions', promo_codes:'Promo codes', auto_renewal:'Automatic renewal', app_integration:'Client applications', dns_protection:'DNS protection',
+    dns_policy_advanced:'Advanced DNS policies', branding:'Custom branding', custom_branding:'Custom branding', custom_domain:'Custom domains', email_branding:'Branded email', custom_email_sender:'Custom email sender', priority_support:'Priority support',
+    account_balance:'Account balance', applications:'Client applications', dns_custom_profiles:'Custom DNS profiles', dns_enforcement:'DNS policy enforcement', backups:'Backups', plugins:'Plugins', unlimited_servers:'Unlimited servers',
+  },
+  ru: {
+    wireguard:'WireGuard', amneziawg:'AmneziaWG', proxy_protocols:'Расширенные VPN-протоколы', client_portal:'Клиентский портал', telegram_bots:'Telegram-боты',
+    nowpayments:'Оплата криптовалютой', payments:'Платёжные провайдеры', multi_server:'Управление несколькими серверами', mikrotik_adapter:'Интеграция MikroTik', traffic_rules:'Правила трафика',
+    android_app:'Приложение Android', white_label_basic:'Базовый брендинг', white_label:'Полный white label', auto_backup:'Автоматические бэкапы', corporate_vpn:'Корпоративный VPN',
+    manager_rbac:'Роли и права менеджеров', promo_codes:'Промокоды', auto_renewal:'Автоматическое продление', app_integration:'Клиентские приложения', dns_protection:'DNS-защита',
+    dns_policy_advanced:'Расширенные DNS-политики', branding:'Брендинг', custom_branding:'Собственный брендинг', custom_domain:'Собственные домены', email_branding:'Брендированные письма', custom_email_sender:'Собственный отправитель писем', priority_support:'Приоритетная поддержка',
+    account_balance:'Баланс аккаунта', applications:'Клиентские приложения', dns_custom_profiles:'Собственные DNS-профили', dns_enforcement:'Принудительные DNS-политики', backups:'Резервные копии', plugins:'Плагины', unlimited_servers:'Безлимитные серверы',
+  },
+  de: {
+    wireguard:'WireGuard', amneziawg:'AmneziaWG', proxy_protocols:'Erweiterte VPN-Protokolle', client_portal:'Kundenportal', telegram_bots:'Telegram-Bots', nowpayments:'Kryptozahlungen', payments:'Zahlungsanbieter', multi_server:'Multi-Server-Verwaltung', traffic_rules:'Datenverkehrsregeln', white_label:'Vollständiges White-Label', auto_backup:'Automatische Backups', corporate_vpn:'Unternehmens-VPN', manager_rbac:'Managerrollen und Rechte', promo_codes:'Promo-Codes', auto_renewal:'Automatische Verlängerung', app_integration:'Client-Anwendungen', dns_protection:'DNS-Schutz', dns_policy_advanced:'Erweiterte DNS-Richtlinien', custom_branding:'Eigenes Branding', custom_domain:'Eigene Domains', custom_email_sender:'Eigener E-Mail-Absender', account_balance:'Kontoguthaben', applications:'Client-Anwendungen', dns_custom_profiles:'Eigene DNS-Profile', dns_enforcement:'Erzwungene DNS-Richtlinien', backups:'Backups', plugins:'Plugins', unlimited_servers:'Unbegrenzte Server', priority_support:'Bevorzugter Support',
+  },
+  fr: {
+    wireguard:'WireGuard', amneziawg:'AmneziaWG', proxy_protocols:'Protocoles VPN avancés', client_portal:'Portail client', telegram_bots:'Bots Telegram', nowpayments:'Paiements crypto', payments:'Prestataires de paiement', multi_server:'Gestion multi-serveurs', traffic_rules:'Règles de trafic', white_label:'White label complet', auto_backup:'Sauvegardes automatiques', corporate_vpn:'VPN d’entreprise', manager_rbac:'Rôles et droits des responsables', promo_codes:'Codes promo', auto_renewal:'Renouvellement automatique', app_integration:'Applications clientes', dns_protection:'Protection DNS', dns_policy_advanced:'Politiques DNS avancées', custom_branding:'Identité visuelle personnalisée', custom_domain:'Domaines personnalisés', custom_email_sender:'Expéditeur e-mail personnalisé', account_balance:'Solde du compte', applications:'Applications clientes', dns_custom_profiles:'Profils DNS personnalisés', dns_enforcement:'Politiques DNS imposées', backups:'Sauvegardes', plugins:'Plugins', unlimited_servers:'Serveurs illimités', priority_support:'Support prioritaire',
+  },
+  es: {
+    wireguard:'WireGuard', amneziawg:'AmneziaWG', proxy_protocols:'Protocolos VPN avanzados', client_portal:'Portal del cliente', telegram_bots:'Bots de Telegram', nowpayments:'Pagos con criptomonedas', payments:'Proveedores de pago', multi_server:'Gestión multiservidor', traffic_rules:'Reglas de tráfico', white_label:'White label completo', auto_backup:'Copias automáticas', corporate_vpn:'VPN corporativa', manager_rbac:'Roles y permisos de gestores', promo_codes:'Códigos promocionales', auto_renewal:'Renovación automática', app_integration:'Aplicaciones cliente', dns_protection:'Protección DNS', dns_policy_advanced:'Políticas DNS avanzadas', custom_branding:'Marca personalizada', custom_domain:'Dominios personalizados', custom_email_sender:'Remitente de correo personalizado', account_balance:'Saldo de la cuenta', applications:'Aplicaciones cliente', dns_custom_profiles:'Perfiles DNS personalizados', dns_enforcement:'Políticas DNS obligatorias', backups:'Copias de seguridad', plugins:'Plugins', unlimited_servers:'Servidores ilimitados', priority_support:'Soporte prioritario',
+  },
 }
 function featureLabel(feature) {
   const key = String(feature || '').trim()
-  return tr('settings.feature_' + key) || FEATURE_LABELS[key] || key.replace(/[_-]+/g, ' ').replace(/^./, char => char.toUpperCase())
+  const language = FEATURE_LABELS[locale.value] ? locale.value : 'en'
+  return tr('settings.feature_' + key) || FEATURE_LABELS[language][key] || FEATURE_LABELS.en[key] || key.replace(/[_-]+/g, ' ').replace(/^./, char => char.toUpperCase())
 }
 const licClientsUsed = computed(() => license.current_clients ?? 0)
 const licServersUsed = computed(() => license.current_servers ?? 0)
@@ -822,6 +858,13 @@ function selectSettingsTab(value) {
   if (!tab) return
   tab.on()
   settingsPickerOpen.value = false
+}
+function setActiveSettingsSection(key) {
+  active.value = key
+  const query = { ...route.query }
+  if (key === 'migration') query.section = 'migration'
+  else delete query.section
+  router.replace({ path: '/settings', query }).catch(() => {})
 }
 const paySubtitle = computed(() => PAY_META[payProvider.value]?.sub || '')
 const payFields = computed(() => (PAY_META[payProvider.value]?.fields || []).map(f => ({
@@ -1016,36 +1059,24 @@ async function removeSlot(slot) {
   } catch (e) { flash('brand', e.response?.data?.detail || 'Error') }
 }
 
-// ═══════════════ DONATE WALLETS ═══════════════
-// Donation config — backed by GET/POST /system/donation-wallets. `trc` is our
-// TRC-20 field → backend `usdt`. Plus a Paylio card-checkout URL and a `hidden`
-// flag (hide the Support button; only effective when licensed — see below).
-const donate = reactive({ btc: '', eth: '', ton: '', trc: '', usdc: '', card_url: '', hidden: false })
-// "Licensed" unlocks the hide-donate toggle (buying a license already supports us).
+async function loadMigrationAccess() {
+  try {
+    const { data } = await authApi.me()
+    installationOwner.value = Boolean(data?.is_superadmin)
+  } catch (_) {
+    installationOwner.value = false
+  } finally {
+    migrationAccessLoaded.value = true
+  }
+}
+
+// Keep the license state independent from optional customer-facing support UI.
 const licensed = computed(() => {
   const tier = String(license.tier || license.type || '').toLowerCase()
   return !!(license.lifetime || license.lifetime_protected ||
     (license.days_remaining != null && license.days_remaining > 0) ||
     (tier && !['', 'none', 'free', 'trial', 'unlicensed'].includes(tier)))
 })
-async function loadDonate() {
-  try {
-    const d = (await systemApi.getDonationWallets()).data || {}
-    donate.btc = d.btc || ''; donate.eth = d.eth || ''; donate.ton = d.ton || ''
-    donate.trc = d.usdt || ''; donate.usdc = d.usdc || ''
-    donate.card_url = d.card_url || ''; donate.hidden = !!d.hidden
-  } catch (_) {}
-}
-async function saveDonateWallets() {
-  try {
-    await systemApi.updateDonationWallets({
-      btc: donate.btc, eth: donate.eth, ton: donate.ton, usdt: donate.trc, usdc: donate.usdc,
-      card_url: donate.card_url, hidden: donate.hidden,
-    })
-    flash('dn', tr('common.saved') || 'Saved')
-  } catch (e) { flash('dn', e.response?.data?.detail || 'Error') }
-}
-
 // ═══════════════ UPDATE CHANNEL ═══════════════
 const channel = ref('stable')
 async function loadChannel() { try { const r = await systemApi.getUpdateChannel(); channel.value = r.data.channel || 'stable' } catch (_) {} }
@@ -1061,8 +1092,22 @@ const themeOptions = computed(() => [
 
 onMounted(() => {
   ui.set({ title: tr('nav.settings') || 'Settings' })
-  loadLicense(); loadLicenseServer(); loadPayments(); loadSmtp(); loadNotif(); loadApps(); loadPortalExperience(); loadLimits(); loadWebAccess(); loadBranding(); loadChannel(); loadDonate()
+  loadMigrationAccess()
+  loadLicense(); loadLicenseServer(); loadPayments(); loadSmtp(); loadNotif(); loadApps(); loadPortalExperience(); loadLimits(); loadWebAccess(); loadBranding(); loadChannel()
 })
+watch([() => route.query.section, canUsePanelMigration, () => licenseStore.loaded, migrationAccessLoaded], ([section, allowed, licenseLoaded, accessLoaded]) => {
+  if (!licenseLoaded || !accessLoaded) return
+  if (section === 'migration' && allowed) {
+    active.value = 'migration'
+    return
+  }
+  if (active.value === 'migration' && !allowed) active.value = 'license'
+  if (section === 'migration' && !allowed) {
+    const query = { ...route.query }
+    delete query.section
+    router.replace({ path: '/settings', query }).catch(() => {})
+  }
+}, { immediate: true })
 // Revert any unsaved live-preview accent back to the saved one when leaving Settings.
 onUnmounted(() => branding.applyBranding())
 </script>
@@ -1096,6 +1141,23 @@ onUnmounted(() => branding.applyBranding())
 .d2-settings-picker-list button > svg { color:var(--text-3); }
 .d2-settings-picker-list button.active { border-color:var(--accent);background:var(--accent-soft);color:var(--accent); }
 .d2-settings-picker-list button.active > span,.d2-settings-picker-list button.active > svg { color:var(--accent); }
+.d2-license-desktop-hero { display:grid;grid-template-columns:44px minmax(150px,1fr) auto minmax(390px,1.7fr);align-items:center;gap:13px;padding:14px;border:1px solid var(--border);border-radius:13px;background:var(--panel-2);margin-bottom:12px; }
+.d2-license-desktop-icon { width:44px;height:44px;display:grid;place-items:center;border:1px solid var(--border-strong);border-radius:12px;color:var(--accent);background:var(--panel); }
+.d2-license-desktop-title { min-width:0;display:flex;flex-direction:column;gap:2px; }
+.d2-license-desktop-title small,.d2-license-desktop-metrics small { color:var(--text-3);font-size:10.5px; }
+.d2-license-desktop-title strong { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:16px;font-weight:680;text-transform:capitalize; }
+.d2-license-status { display:inline-flex;align-items:center;gap:6px;padding:5px 9px;border-radius:99px;background:var(--panel-3);color:var(--text-3);font-size:10.5px;font-weight:650;white-space:nowrap; }
+.d2-license-status i { width:6px;height:6px;border-radius:50%;background:currentColor; }
+.d2-license-status.active { color:var(--green);background:color-mix(in srgb,var(--green) 11%,transparent); }
+.d2-license-desktop-metrics { min-width:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px; }
+.d2-license-desktop-metrics > div { min-width:0;display:flex;flex-direction:column;gap:3px;padding:9px 11px;border-left:1px solid var(--border); }
+.d2-license-desktop-metrics strong { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:650 12px 'JetBrains Mono',monospace; }
+.d2-license-desktop-features { padding:14px;border:1px solid var(--border);border-radius:13px;margin-bottom:16px; }
+.d2-license-desktop-features-head { display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:11px; }
+.d2-license-desktop-features-head > div { min-width:0;display:flex;flex-direction:column;gap:2px; }
+.d2-license-desktop-features-head strong { font-size:12.5px;font-weight:650; }
+.d2-license-desktop-features-head small { color:var(--text-3);font-size:10.5px; }
+.d2-license-desktop-features-head > span { min-width:28px;padding:4px 8px;border:1px solid var(--border-strong);border-radius:99px;color:var(--text-2);font:650 10.5px 'JetBrains Mono',monospace;text-align:center; }
 .d2-license-sheet { display:flex;flex-direction:column;gap:14px; }
 .d2-license-sheet-hero { display:grid;grid-template-columns:40px minmax(0,1fr) auto;align-items:center;gap:11px;padding:13px;border:1px solid var(--border);border-radius:13px;background:var(--panel-2); }
 .d2-license-sheet-hero > span { width:40px;height:40px;display:grid;place-items:center;border-radius:11px;background:var(--accent-soft);color:var(--accent); }
@@ -1113,6 +1175,8 @@ onUnmounted(() => branding.applyBranding())
 .d2-license-feature-list { display:grid;grid-template-columns:1fr 1fr;gap:7px; }
 .d2-license-feature-list > div { min-width:0;display:flex;align-items:center;gap:8px;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--panel-2);color:var(--text-2);font-size:12px; }
 .d2-license-feature-list svg { flex:none;color:var(--green); }
+.d2-license-feature-list-desktop { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.d2-license-feature-list-desktop > div { background:var(--panel); }
 .d2-license-sheet-empty { padding:14px;border:1px dashed var(--border-strong);border-radius:11px;color:var(--text-3);font-size:12px;line-height:1.5; }
 .d2-license-sheet-form { display:flex;flex-direction:column;gap:10px; }
 .d2-license-sheet-form label { font-size:12px;font-weight:650;color:var(--text); }
@@ -1149,7 +1213,7 @@ onUnmounted(() => branding.applyBranding())
   .d2-settings-layout { display:block !important; }
   .d2-settings-rail { display:none !important; }
   .d2-settings-content { width:100%;gap:12px !important; }
-  .d2-settings-content > div:not(.d2-license-mobile) { min-width:0;padding:14px !important; }
+  .d2-settings-content > div:not(.d2-license-mobile):not(.migration-root) { min-width:0;padding:14px !important; }
   .d2-license-desktop { display:none !important; }
   .d2-license-mobile { display:flex;flex-direction:column;gap:11px;padding:13px;background:var(--panel);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow); }
   .d2-license-tier-card { width:100%;min-height:56px;display:grid;grid-template-columns:38px minmax(0,1fr) auto 17px;align-items:center;gap:10px;padding:8px;border:1px solid var(--border);border-radius:12px;background:var(--panel-2);color:var(--text);font:inherit;text-align:left;cursor:pointer; }
@@ -1157,9 +1221,7 @@ onUnmounted(() => branding.applyBranding())
   .d2-license-tier-copy { min-width:0;display:flex;flex-direction:column;gap:2px; }
   .d2-license-tier-copy small { color:var(--text-3);font-size:10px; }
   .d2-license-tier-copy strong { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:680;text-transform:capitalize; }
-  .d2-license-status { display:flex;align-items:center;gap:5px;padding:4px 7px;border-radius:99px;background:var(--panel-3);color:var(--text-3);font-size:9.5px;font-weight:650; }
-  .d2-license-status i { width:6px;height:6px;border-radius:50%;background:currentColor; }
-  .d2-license-status.active { color:var(--green);background:color-mix(in srgb,var(--green) 12%,transparent); }
+  .d2-license-status { padding:4px 7px;font-size:9.5px; }
   .d2-license-tier-card > svg { color:var(--text-3); }
   .d2-license-mobile-metrics { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px; }
   .d2-license-mobile-metrics > div { min-width:0;display:flex;flex-direction:column;gap:3px;padding:9px;border:1px solid var(--border);border-radius:10px; }

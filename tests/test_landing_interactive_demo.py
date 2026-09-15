@@ -20,6 +20,7 @@ PORTAL_MAIN = PORTAL_SOURCE / "main.js"
 PORTAL_ROUTER = PORTAL_SOURCE / "router.js"
 PORTAL_MOCK = PORTAL_SOURCE / "mockAdapter.js"
 ADMIN_I18N = Path("src/web/frontend/src/i18n/index.js")
+ADMIN_TRANSLATE = Path("src/web/frontend/src/i18n/translate.js")
 PORTAL_I18N = Path("src/web/client-portal/src/i18n/index.js")
 DEMO_QR = Path("src/web/demo/demoQr.js")
 D2_SHELL = Path("src/web/frontend/src/design2/shell/D2Shell.vue")
@@ -34,7 +35,7 @@ def test_candidate_demo_is_static_and_cannot_call_a_backend():
 
     assert "connect-src 'none'" in index
     assert "form-action 'none'" in index
-    assert "<script src=\"demo.js\" defer></script>" in index
+    assert '<script src="demo.js?v=20260908-audit1" defer></script>' in index
     for network_primitive in (
         "fetch(",
         "XMLHttpRequest",
@@ -64,6 +65,12 @@ def test_candidate_demo_uses_exact_synthetic_business_numbers():
     assert "'$31,908'" in script
     assert "'$382,896'" in script
     assert "at $4.00 average revenue" in script
+    # The visible provider breakdown is the same stated monthly recurring
+    # revenue, rather than a leftover fixture from a different demo scale.
+    for amount in ("$19,464", "$7,339", "$3,510", "$1,595"):
+        assert amount in script
+    for stale_amount in ("$47,280", "$17,827", "$8,526", "$3,875"):
+        assert stale_amount not in script
 
 
 def test_admin_and_client_portal_are_presented_as_separate_apps():
@@ -92,6 +99,20 @@ def test_picker_opens_both_authentic_applications():
     assert "`/demo/?lang=${encodeURIComponent(locale.value || 'en')}`" in app
 
 
+def test_recommended_tours_open_real_admin_or_portal_routes():
+    landing = LIVE_INDEX.read_text(encoding="utf-8")
+    script = SCRIPT.read_text(encoding="utf-8")
+
+    for tour in (
+        "servers", "customer-payment", "devices-dns", "billing", "corporate",
+        "white-label-team",
+    ):
+        assert f"/demo/?tour={tour}" in landing
+        assert f"{tour!r}:" in script or f"{tour}:" in script
+    assert "const demoTourTargets" in script
+    assert "window.location.replace" in script
+
+
 def test_authentic_apps_apply_the_selected_demo_locale_before_mount():
     admin = AUTHENTIC_MAIN.read_text(encoding="utf-8")
     portal = PORTAL_MAIN.read_text(encoding="utf-8")
@@ -108,6 +129,26 @@ def test_authentic_apps_apply_the_selected_demo_locale_before_mount():
         bootstrap = source.read_text(encoding="utf-8")
         assert "window.location.pathname.includes('/demo-authentic/')" in bootstrap
         assert "locale: initialLocale" in bootstrap
+
+
+def test_authentic_admin_routes_share_the_live_demo_locale():
+    shell = D2_SHELL.read_text(encoding="utf-8")
+    bridge = ADMIN_TRANSLATE.read_text(encoding="utf-8")
+    admin_i18n = ADMIN_I18N.read_text(encoding="utf-8")
+
+    assert "export const i18nMessages" in admin_i18n
+    assert "window.__FLIREXA_DEMO_LOCALE__" in bridge
+    assert "export function setTranslationLocale" in bridge
+    assert "export function translateGlobal" in bridge
+    assert "setTranslationLocale(code)" in shell
+    assert "languageEpoch.value += 1" in shell
+    assert ':key="`${route.fullPath}:${languageEpoch}`"' in shell
+
+    design2 = Path("src/web/frontend/src/design2")
+    for component in design2.rglob("*.vue"):
+        source = component.read_text(encoding="utf-8")
+        if "function tr(" in source:
+            assert "translateGlobal" in source, component
 
 
 def test_picker_uses_the_official_logo_and_translates_all_supported_languages():
@@ -153,7 +194,7 @@ def test_picker_keeps_sanitized_app_previews_in_an_explicit_local_variant():
     assert "windows-desktop.webp" not in script
     for filename in expected_assets:
         assert (APP_ASSETS / filename).is_file()
-        assert f"assets/apps/{filename}" in script
+        assert f'"/demo-next/assets/apps/{filename}"' in script
 
     # Intermediate captures can contain source-machine details and must not ship.
     assert not (APP_ASSETS / "android-home-base.webp").exists()
@@ -207,6 +248,8 @@ def test_authentic_admin_uses_the_same_synthetic_scale_as_the_portal_demo():
     assert len(client_counts) == 17
     assert sum(client_counts) == 7977
     assert "revenue_30d: '31908.00'" in mock
+    assert "tier: index === 0 ? 'premium'" in mock
+    assert "last_login: isoAgo(18 + index * 19)" in mock
 
 
 def test_authentic_portal_reuses_current_product_screens_and_layout():
@@ -223,7 +266,19 @@ def test_authentic_portal_reuses_current_product_screens_and_layout():
     assert "`/demo-authentic/admin/?lang=${encodeURIComponent(locale.value || 'en')}`" in app
     assert 'class="demo-preview-bar"' in app
     assert 'class="demo-switcher"' not in app
-    assert "position: fixed" not in app
+    assert ".demo-preview-bar {\n  position: fixed" not in app
+
+
+def test_authentic_demos_keep_trial_and_pricing_visible_and_prompt_after_exploration():
+    admin = AUTHENTIC_APP.read_text(encoding="utf-8")
+    portal = PORTAL_APP.read_text(encoding="utf-8")
+
+    for source in (admin, portal):
+        assert "Start 7-Day Enterprise Trial" in source
+        assert "View pricing" in source
+        assert "Interactive preview with synthetic data" in source
+        assert "exploredRoutes.value.length >= 3" in source
+        assert "Ready to test Flirexa on your own infrastructure? Start your free 7-day Enterprise trial." in source
 
 
 def test_authentic_portal_reuses_the_original_login_and_official_branding():
@@ -323,6 +378,6 @@ def test_public_landing_points_to_the_clean_demo_chooser():
 
     assert 'href="/demo/"' in live_index
     assert "demo/VPN-Admin-Panel-demo.html" not in live_index
-    assert 'src="/demo-next/demo.js"' in chooser
+    assert 'src="/demo-next/demo.js?v=20260908-audit1"' in chooser
     assert 'id="demoRoot"' in chooser
     assert "/seo-pages.js" not in chooser

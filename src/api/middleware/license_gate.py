@@ -31,9 +31,12 @@ UPGRADE_URL = "https://flirexa.biz/#pricing"
 # out of upgrade responses: the public checkout and current licence catalogue
 # sell Starter, Business, and Enterprise.
 FEATURE_MINIMUM_TIER = {
+    "client_portal": "starter",
+    "nowpayments": "starter",
     "proxy_protocols": "starter",
     "promo_codes": "starter",
     "auto_renewal": "starter",
+    "server_migration": "enterprise",
     "multi_server": "business",
     "mikrotik_adapter": "business",
     "telegram_client_bot": "business",
@@ -41,6 +44,7 @@ FEATURE_MINIMUM_TIER = {
     "traffic_rules": "business",
     "dns_protection": "business",
     "dns_policy_advanced": "enterprise",
+    "plugins": "business",
     # All built-in appearance controls are Enterprise-only. Keep the legacy
     # feature name mapped to Enterprise so an old caller cannot advertise
     # Business as sufficient.

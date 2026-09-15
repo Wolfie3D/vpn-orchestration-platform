@@ -9,8 +9,8 @@ Runs on a periodic worker tick (and on every license activation/refresh):
   configs, keys are untouched — so the operator just needs to re-activate to
   bring everything back.
 
-  The FREE quota is: up to **one LOCAL server of each `wireguard` / `amneziawg`**
-  protocol (max 2), running on the install box itself. Remote/agent servers and
+  The Community Edition quota is: **one LOCAL `wireguard` or `amneziawg`**
+  server, running on the install box itself. Remote/agent servers and
   proxy protocols (hysteria2 / tuic) are paid-only and always suspended on FREE.
 
 - If the install gained `multi_server` again (renewal / new purchase), every
@@ -18,8 +18,8 @@ Runs on a periodic worker tick (and on every license activation/refresh):
   enforcement stopped them are started again; servers that were already
   operator-stopped remain OFFLINE. Pending resumes survive process restarts.
 
-The "kept FREE quota" picks the *oldest* server of each protocol type — that's
-typically the auto-provisioned one from install, which the operator wants kept.
+The kept Community Edition quota picks the *oldest* eligible server — typically
+the auto-provisioned one from install, which the operator wants kept.
 """
 
 from __future__ import annotations
@@ -37,15 +37,15 @@ from ...database.connection import SessionLocal
 from ...database.models import Server, ServerLifecycleStatus, ServerStatus
 
 
-# Server types that count toward the FREE 1-per-protocol quota.
+# Server types eligible for the one-server Community Edition quota.
 # Proxy protocols (hysteria2 / tuic) are intentionally absent — they're paid
 # (extra_protocols), so on FREE they fall through to "suspend".
-_FREE_QUOTA_TYPES = {"wireguard", "amneziawg"}
+_COMMUNITY_SERVER_TYPES = {"wireguard", "amneziawg"}
 
 
 def _is_remote_server(s) -> bool:
-    """True if the server is managed off-box (SSH or agent). The FREE tier only
-    covers servers running on the install box itself; remote/agent servers are
+    """True if the server is managed off-box (SSH or agent). Community Edition
+    covers one server running on the install box itself; remote/agent servers are
     subscription-only, so on FREE they are always suspended regardless of the
     per-protocol quota."""
     return bool(getattr(s, "ssh_host", None)) or bool(getattr(s, "agent_url", None))
@@ -269,24 +269,23 @@ def reconcile(db: Optional[Session] = None) -> dict:
                 "suspending fleet now.", _SUSPEND_GRACE_H,
             )
 
-        # Grace elapsed (or disabled): keep the *oldest* of each FREE-quota
-        # protocol; suspend every other server.
+        # Grace elapsed (or disabled): keep the oldest eligible Community
+        # Edition server; suspend every other server.
         all_servers = db.query(Server).order_by(Server.id.asc()).all()
-        kept_per_type: set[str] = set()
+        kept_community_server = False
         for s in all_servers:
             if s.lifecycle_status == ServerLifecycleStatus.SUSPENDED_NO_LICENSE.value:
                 continue  # already suspended, leave alone
-            # FREE keeps up to one LOCAL server of each free-quota protocol
-            # (wireguard + amneziawg) on the install box. Everything else is
-            # paid-only and gets suspended: remote/agent servers, proxy
-            # protocols (hysteria2/tuic), and any excess beyond one-per-protocol.
+            # Community Edition keeps one local WireGuard or AmneziaWG server
+            # on the install box. Everything else is paid-only and gets
+            # suspended: remote/agent servers, proxy protocols, and excess.
             keep = (
                 not _is_remote_server(s)
-                and s.server_type in _FREE_QUOTA_TYPES
-                and s.server_type not in kept_per_type
+                and s.server_type in _COMMUNITY_SERVER_TYPES
+                and not kept_community_server
             )
             if keep:
-                kept_per_type.add(s.server_type)
+                kept_community_server = True
                 continue
             # Excess / remote / proxy: suspend.
             if s.effective_lifecycle_status == ServerLifecycleStatus.ONLINE.value:

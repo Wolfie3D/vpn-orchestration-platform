@@ -83,12 +83,31 @@ _RECOVERY_MUTATING_PREFIXES = (
     "/api/v1/system/license",
     "/api/v1/system/activation",
     "/api/v1/backup",
+    "/api/v1/panel-migration",
 )
 
 _AUTH_MUTATING_PREFIXES = (
     "/api/v1/auth/",
     "/client-portal/auth/",
 )
+
+
+def is_migration_standby_request_allowed(path: str, method: str) -> bool:
+    """Keep a fenced migration source inspectable but never writable.
+
+    The owner needs login/refresh and the migration status/rollback controls
+    during the seven-hour safety window. All other mutation endpoints,
+    including licence activation, updates and restore, must stay blocked so a
+    fenced predecessor cannot become a second live panel.
+    """
+    method = method.upper()
+    if method in {"GET", "HEAD", "OPTIONS"}:
+        return True
+    if path.startswith("/api/v1/auth/"):
+        return True
+    if path.startswith("/api/v1/panel-migration"):
+        return True
+    return not (path.startswith("/api/") or path.startswith("/client-portal/"))
 
 _SYSTEM_MUTATION_PREFIXES = (
     "/api/v1/system/",

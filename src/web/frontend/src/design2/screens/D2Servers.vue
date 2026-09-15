@@ -361,6 +361,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { d2confirm } from '../ui/confirm'
 import { useI18n } from 'vue-i18n'
+import { translateGlobal } from '../../i18n/translate'
 import { useServersStore } from '../../stores/servers'
 import { serversApi } from '../../api'
 import { useD2Ui } from '../../stores/d2ui'
@@ -373,7 +374,7 @@ import D2Button from '../ui/D2Button.vue'
 import D2HelpTip from '../ui/D2HelpTip.vue'
 
 const { t } = useI18n({ useScope: 'global' })
-function tr(k, p) { try { const v = t(k, p || {}); return v === k ? '' : v } catch (_) { return '' } }
+function tr(k, p) { try { return translateGlobal(k, p || {}) } catch (_) { return '' } }
 const store = useServersStore()
 const ui = useD2Ui()
 const menuFor = ref(null)

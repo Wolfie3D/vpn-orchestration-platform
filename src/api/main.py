@@ -22,7 +22,7 @@ import psutil
 
 from sqlalchemy.orm import Session
 from ..database.connection import init_db, close_db, SessionLocal, get_db
-from .routes import clients, servers, bots, payments, system, agent, client_portal, tariffs, traffic_rules, internal, admin_auth, portal_users, promo_codes, app_accounts, backup, corporate, health, updates, plugins_admin, segments, dns_protection
+from .routes import clients, servers, bots, payments, system, agent, client_portal, tariffs, traffic_rules, internal, admin_auth, portal_users, promo_codes, app_accounts, backup, corporate, health, updates, plugins_admin, segments, dns_protection, panel_migration
 # Register corporate models so Base.metadata.create_all() includes their tables
 from ..modules.corporate import models as _corporate_models  # noqa: F401
 from .middleware.auth import get_current_admin, require_permission, require_superadmin
@@ -114,6 +114,7 @@ async def lifespan(app: FastAPI):
     # Startup
     _start_time = time.time()
     is_primary = _acquire_primary_worker_lock()
+    migration_standby = os.getenv("FLIREXA_MIGRATION_STANDBY", "0").lower() in {"1", "true", "yes", "on"}
     logger.info("EVENT:API_START Flirexa API starting (worker role: {})",
                 "primary" if is_primary else "secondary")
 
@@ -258,7 +259,7 @@ async def lifespan(app: FastAPI):
         _lic_primary, _lic_backup = _get_license_urls()
     except Exception:
         _lic_primary, _lic_backup = os.getenv("LICENSE_SERVER_URL", ""), ""
-    if _lic_primary or _lic_backup:
+    if (_lic_primary or _lic_backup) and not migration_standby:
         from ..modules.license.online_validator import run_single_check, run_validator_loop
         try:
             await asyncio.wait_for(run_single_check(warm_cache=True), timeout=5)
@@ -279,7 +280,7 @@ async def lifespan(app: FastAPI):
     # Populates check_for_update's cache so the panel's "available_update" badge
     # stays fresh without operator clicks. Disabled via AUTO_UPDATE_CHECK_ENABLED=false.
     # Primary-only: singleton loop, N workers would just N× the manifest polls.
-    if is_primary:
+    if is_primary and not migration_standby:
         try:
             from ..modules.updates.auto_check import run_auto_update_check_loop
             _update_autocheck_task = asyncio.create_task(run_auto_update_check_loop())
@@ -300,18 +301,19 @@ async def lifespan(app: FastAPI):
     # each fire their own sequential SSH/agent round-trip. The cache is
     # the only thing read in the hot request path — see
     # src/modules/cache/handshake_cache.py for the design write-up.
-    try:
-        from ..modules.cache.handshake_cache import ensure_refresher_started
-        ensure_refresher_started()
-        logger.info("Handshake cache background refresher armed")
-    except Exception as e:
-        logger.warning("Could not start handshake cache refresher: {}", e)
+    if not migration_standby:
+        try:
+            from ..modules.cache.handshake_cache import ensure_refresher_started
+            ensure_refresher_started()
+            logger.info("Handshake cache background refresher armed")
+        except Exception as e:
+            logger.warning("Could not start handshake cache refresher: {}", e)
 
     # Operator health watchdog: alerts on CPU / fd / memory / PG zombie
     # sessions to the admin Telegram chat configured under system_config.
     # Alerts before resource exhaustion affects the panel.
     # Primary-only: duplicated watchdogs would double every Telegram alert.
-    if is_primary:
+    if is_primary and not migration_standby:
         try:
             from ..modules.watchdog import start_watchdog
             start_watchdog()
@@ -323,7 +325,7 @@ async def lifespan(app: FastAPI):
     # this the excess servers would silently come back online next reboot.
     # Primary-only: it mutates server rows; N workers racing the same
     # reconcile at boot buys nothing.
-    if is_primary:
+    if is_primary and not migration_standby:
         try:
             from ..modules.license.enforcement import reconcile as _lic_reconcile
             _lic_reconcile()
@@ -332,7 +334,7 @@ async def lifespan(app: FastAPI):
 
     # Start instance heartbeat (sends status even without a license).
     # Primary-only: one heartbeat per panel, not one per worker process.
-    if is_primary:
+    if is_primary and not migration_standby:
         try:
             from ..modules.license.instance_manager import start_heartbeat_task
             _heartbeat_task = start_heartbeat_task()
@@ -343,6 +345,8 @@ async def lifespan(app: FastAPI):
     # Also primary-only under multi-worker for the same singleton reason.
     _bg_tasks = []
     run_in_process, scheduler_reason = _should_run_in_process_background_tasks()
+    if migration_standby:
+        run_in_process, scheduler_reason = False, "Migration target standby"
     if not is_primary:
         run_in_process, scheduler_reason = False, "Secondary worker — scheduler runs on the primary"
     if not run_in_process:
@@ -429,6 +433,24 @@ def create_app(
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         return response
 
+    @app.middleware("http")
+    async def migration_standby_middleware(request: Request, call_next):
+        """Fence a predecessor panel while preserving owner rollback access."""
+        if os.getenv("FLIREXA_MIGRATION_STANDBY", "0").lower() not in {
+            "1", "true", "yes", "on",
+        }:
+            return await call_next(request)
+        from ..modules.operational_mode import is_migration_standby_request_allowed
+        if is_migration_standby_request_allowed(request.url.path, request.method):
+            return await call_next(request)
+        return JSONResponse(
+            status_code=423,
+            content={
+                "detail": "This panel is fenced during the server migration rollback window.",
+                "operational_mode": "migration_standby",
+            },
+        )
+
     # License enforcement middleware
     @app.middleware("http")
     async def license_middleware(request: Request, call_next):
@@ -447,6 +469,7 @@ def create_app(
         allowed_prefixes = (
             "/api/v1/system/license",
             "/api/v1/system/activation",
+            "/api/v1/panel-migration", # rollback/status must survive source key handoff
             "/api/v1/system/restart",    # restart must work even when license expired
             "/api/v1/updates",           # updates/restart must work to fix expired license
             "/api/v1/public/",
@@ -458,9 +481,6 @@ def create_app(
             "/assets/",
             "/login",
             "/activation",
-            # Client portal: allow auth/login endpoints so users can always log in
-            "/client-portal/auth/",
-            "/client-portal/public/",
         )
         # Pass requests that match whitelist OR non-API paths except client-portal
         is_api_path = normalized_path.startswith("/api/") or normalized_path.startswith("/client-portal/")
@@ -575,16 +595,17 @@ def create_app(
                 # app.include_router(...). A mismatch silently turns this
                 # into a no-op on FREE installs.
                 # Each entry maps prefix → (feature_flag, tier_for_upgrade_cta).
-                # /api/v1/payments gates on `nowpayments` (FREE+) — the basic
-                # payment surface (plans CRUD, invoice list, webhook) is
-                # available wherever NOWPayments is. Per-provider gating for
-                # card processors (Stripe, Mollie, PayMe, Razorpay, PayPal,
-                # CryptoPay) happens inside the router against the `payments`
-                # feature so FREE can transact via crypto but cannot use the
-                # paid provider plugins.
+                # Community Edition is intentionally operator-only. Plans,
+                # customer billing and the portal start at Starter; the full
+                # provider suite remains a Business capability inside the
+                # payment router.
                 "/api/v1/traffic": ("traffic_rules", "business"),
-                "/api/v1/payments": ("nowpayments", "business"),
+                "/api/v1/payments": ("nowpayments", "starter"),
+                "/api/v1/tariffs": ("client_portal", "starter"),
+                "/api/v1/portal-users": ("client_portal", "starter"),
+                "/client-portal/": ("client_portal", "starter"),
                 "/api/v1/promo-codes": ("promo_codes", "starter"),
+                "/api/v1/plugins": ("plugins", "business"),
             }
             for route_prefix, (feature_name, upgrade_tier) in feature_routes.items():
                 if normalized_path.startswith(route_prefix) and not info.has_feature(feature_name):
@@ -872,6 +893,18 @@ def create_app(
         prefix="/api/v1/backup",
         tags=["Backup"],
         dependencies=admin_auth_dep + [Depends(require_permission("backup"))]
+    )
+
+    # Whole-panel moves transfer every secret, customer record and payment
+    # integration. Managers must never be able to initiate one, even if they
+    # have ordinary backup permission.
+    app.include_router(
+        panel_migration.router,
+        prefix="/api/v1/panel-migration",
+        tags=["Panel Migration"],
+        dependencies=admin_auth_dep + [
+            Depends(require_superadmin),
+        ],
     )
 
     app.include_router(

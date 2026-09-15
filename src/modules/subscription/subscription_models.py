@@ -214,6 +214,17 @@ class ClientPortalSubscription(Base):
     # Auto-renewal
     auto_renew = Column(Boolean, default=False)
     auto_renew_failures = Column(Integer, default=0)
+    # Automatic renewal is deliberately limited to prepaid account credit.
+    # The customer must explicitly select the period; the scheduler never
+    # infers consent from an earlier one-off purchase.
+    auto_renew_source = Column(String(20), nullable=True)
+    auto_renew_duration_days = Column(Integer, nullable=True)
+    auto_renew_consent_at = Column(DateTime(timezone=True), nullable=True)
+    # Authoritative rail for the current entitlement. Google Play lifecycle
+    # updates may only suspend/expire a subscription when this reference still
+    # points at the same Play purchase; a later balance/admin grant wins.
+    billing_source = Column(String(32), nullable=True)
+    billing_reference = Column(String(160), nullable=True)
 
     # Notification dedup: {"3day": "iso", "1day": "iso", "0day": "iso"}
     notification_sent_at = Column(JSON, default=lambda: {})
@@ -234,6 +245,7 @@ class ClientPortalSubscription(Base):
         Index("ix_cps_status", "status"),
         Index("ix_cps_expiry_date", "expiry_date"),
         Index("ix_cps_status_tier", "status", "tier"),
+        Index("ix_cps_billing_reference", "billing_source", "billing_reference"),
     )
 
     def _aware_expiry(self):
@@ -407,6 +419,55 @@ class ClientPortalPayment(Base):
 
     def __repr__(self):
         return f"<Payment {self.invoice_id} {self.amount_usd} USD via {self.payment_method.value}>"
+
+
+class GooglePlaySubscription(Base):
+    """Last server-verified state for one Google Play purchase token."""
+
+    __tablename__ = "google_play_subscriptions"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(
+        Integer,
+        ForeignKey("client_users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    purchase_token_hash = Column(String(64), nullable=False)
+    purchase_token = Column(EncryptedText(), nullable=False)
+    product_id = Column(String(100), nullable=False)
+    base_plan_id = Column(String(100), nullable=False)
+    plan_tier = Column(String(50), nullable=False)
+    subscription_state = Column(String(80), nullable=False)
+    expiry_time = Column(DateTime(timezone=True), nullable=False, index=True)
+    auto_renewing = Column(Boolean, nullable=False, default=False)
+    acknowledged = Column(Boolean, nullable=False, default=False)
+    order_id = Column(String(255), nullable=True, index=True)
+    last_verified_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_google_play_subscriptions_token_hash",
+            "purchase_token_hash",
+            unique=True,
+        ),
+        Index("ix_google_play_user_state", "user_id", "subscription_state"),
+    )
 
 
 class ClientAccountBalance(Base):

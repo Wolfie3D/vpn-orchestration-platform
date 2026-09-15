@@ -298,9 +298,9 @@ def monitoring_cycle():
         if synced > 0:
             logger.debug(f"Monitoring: synced traffic for {synced} portal subscriptions")
 
-        # Automatic renewal is temporarily fail-closed. The protected adapter
-        # clears historical opt-ins and grants no time until every renewal can
-        # be tied to one newly verified provider settlement.
+        # Process only explicit, balance-funded consent. The renewal worker
+        # atomically debits the wallet and records the completed payment before
+        # extending access; entitlement or quote failures remain fail-closed.
         try:
             from ..modules.subscription.auto_renewal import process_auto_renewals
 

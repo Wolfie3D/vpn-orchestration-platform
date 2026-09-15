@@ -45,4 +45,5 @@ const i18n = createI18n({
   messages: { en, ru, de, fr, es },
 })
 
+export const i18nMessages = { en, ru, de, fr, es }
 export default i18n

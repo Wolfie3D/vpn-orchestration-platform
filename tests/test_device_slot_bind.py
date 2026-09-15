@@ -68,6 +68,10 @@ def _fake_create_slot(self, user, label, initial_server_id=None,
 
 @pytest.fixture
 def ctx():
+    public_key_patch = patch(
+        "src.modules.license.manager._find_public_key", return_value=None
+    )
+    public_key_patch.start()
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -112,6 +116,7 @@ def ctx():
 
     Base.metadata.drop_all(bind=engine)
     engine.dispose()
+    public_key_patch.stop()
 
 
 def _post(client, device_id=None, label="Phone"):

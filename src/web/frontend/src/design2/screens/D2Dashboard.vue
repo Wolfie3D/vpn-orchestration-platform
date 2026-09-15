@@ -157,6 +157,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { translateGlobal } from '../../i18n/translate'
 import { systemApi, clientsApi, serversApi, portalUsersApi, silentPoll } from '../../api'
 import { formatBytes } from '../../utils'
 import { linePath } from '../charts.js'
@@ -167,7 +168,7 @@ import 'leaflet/dist/leaflet.css'
 import Icon from '../ui/Icon.vue'
 
 const { t } = useI18n({ useScope: 'global' })
-function tr(k) { try { const v = t(k); return v === k ? '' : v } catch (_) { return '' } }
+function tr(k) { try { return translateGlobal(k) } catch (_) { return '' } }
 const ui = useD2Ui()
 
 const stats = ref({}); const revenue = ref({}); const charts = ref({ revenue_trend: [], user_trend: [], sub_distribution: {}, payment_methods: {}, traffic_trend: [] })

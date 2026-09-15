@@ -82,6 +82,19 @@ def _enforce_server_creation_entitlement(
             ),
         )
 
+    # Community Edition has one local server in total, not one of each
+    # protocol. Keep the dedicated message so the upgrade path is truthful.
+    if current_plan == "free" and current_count >= 1:
+        raise_feature_required(
+            "multi_server",
+            current_plan="community",
+            upgrade_tier="starter",
+            message=(
+                "Community Edition supports one local WireGuard or AmneziaWG "
+                "server. Upgrade to Starter to add another server."
+            ),
+        )
+
     # The signed max_servers value is authoritative for every tier.  This is
     # important for current Starter keys (one server), and also preserves any
     # custom limits issued to an existing customer.
@@ -97,16 +110,16 @@ def _enforce_server_creation_entitlement(
             ),
         )
 
-    # FREE can run one local WireGuard and one local AmneziaWG.  A tier without
-    # multi_server can never create a second row of the same protocol by
-    # crafting a direct API request.
+    # A non-orchestrated tier can never create a second row of the same
+    # protocol by crafting a direct API request. Community Edition is already
+    # constrained by the total-server check above.
     if not info.has_feature("multi_server") and same_type_count >= 1:
         raise_feature_required(
             "multi_server",
             current_plan=current_plan,
             message=(
                 f"A {server_type} server already exists. Additional servers "
-                "require the Business plan."
+                "require a higher plan."
             ),
         )
 
@@ -204,8 +217,8 @@ async def create_server(
     # Advisory lock (key 1000002) prevents concurrent requests from both
     # passing the check.
     #
-    # FREE gets one local WireGuard + one local AmneziaWG. Starter keeps the
-    # exact signed server limit. Remote nodes require Business regardless of
+    # Community Edition gets one local WireGuard or AmneziaWG server. Starter
+    # keeps the exact signed server limit. Remote nodes require Business regardless of
     # whether the database is currently empty.
     try:
         from sqlalchemy import text as _sql_text

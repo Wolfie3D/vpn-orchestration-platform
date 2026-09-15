@@ -43,6 +43,7 @@ const pinia = createPinia()
 app.use(pinia)
 app.use(router)
 app.use(i18n)
+i18n.global.locale.value = 'en'
 i18n.global.locale.value = demoLocale
 app.use(VueApexCharts)
 app.component('HelpTooltip', HelpTooltip)

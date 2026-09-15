@@ -1,0 +1,11 @@
+{
+  "name": "google-play-billing",
+  "version": "1.0.0",
+  "display_name": "Google Play Billing",
+  "description": "Server-verified Android subscriptions, acknowledgement and Real-time Developer Notifications.",
+  "requires_license_feature": "payments",
+  "min_tier": "business",
+  "author": "flirexa",
+  "operator_toggleable": true,
+  "default_enabled": false
+}

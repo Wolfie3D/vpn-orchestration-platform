@@ -133,6 +133,7 @@ export default {
     "allSegments": "Todos los segmentos",
     "allServers": "Todos los servidores",
     "allStatuses": "Todos los estados",
+    "expiringSoon": "Caduca pronto",
     "assignSegment": "Asignar segmento…",
     "bandwidth": "Ancho de banda",
     "bandwidthLimit": "Límite de ancho de banda (Mbps)",
@@ -371,7 +372,7 @@ export default {
   },
   "nav": {
     "applogs": "Registros de la app",
-    "apps": "Aplicaciones / acceso",
+    "apps": "Acceso del equipo",
     "backup": "Copias de seguridad",
     "bots": "Bots",
     "clients": "Clientes",
@@ -384,17 +385,18 @@ export default {
     "onlineUsers": "Usuarios en línea",
     "payments": "Pagos",
     "plugins": "Plugins",
-    "portal": "Usuarios del portal",
+    "portal": "Clientes del portal",
     "portalUsers": "registrados",
     "promo": "Códigos promo",
     "servers": "Servidores",
     "settings": "Ajustes",
     "slots": "Ranuras de dispositivo",
-    "subscriptions": "Suscripciones",
+    "subscriptions": "Planes y suscripciones",
     "support": "Soporte",
     "systemHealth": "Estado del sistema",
     "traffic": "Reglas de tráfico",
     "updates": "Actualizaciones",
+    "migration": "Migrar panel",
     "online": "Usuarios en línea"
   },
   "navbar": {
@@ -809,6 +811,7 @@ export default {
     "licenseDetails": "Detalles de la licencia",
     "technicalDetails": "Detalles técnicos",
     "includedFeatures": "Funciones incluidas",
+    "includedFeaturesHint": "Todas las funciones disponibles para esta instalación",
     "noAdditionalFeatures": "No hay funciones adicionales indicadas para esta licencia.",
     "activateKeyHint": "Introduce una clave nueva solo para activar o sustituir la licencia de esta instalación.",
     "validity": "Validez",
@@ -907,7 +910,7 @@ export default {
     "releaseDeviceConfirm": "¿Liberar el vínculo de dispositivo de esta ranura?",
     "releaseDevice": "Liberar",
     "search": "Buscar ranuras…",
-    "subtitle": "Dispositivos de clientes multirregión",
+    "subtitle": "Administre los dispositivos individuales asignados a las cuentas de clientes en las ubicaciones VPN disponibles",
     "total": "Total",
     "unbound": "sin vincular"
   },
@@ -1028,6 +1031,26 @@ export default {
     "status_success": "Actualización completada",
     "status_failed": "Actualización fallida",
     "status_rolled_back": "Revertido"
+  },
+  "trialExpiry": {
+    "eyebrow": "PRUEBA ENTERPRISE",
+    "title": "Tu periodo de prueba está a punto de terminar",
+    "expires": "Tu acceso completo a Enterprise seguirá activo hasta el {date}.",
+    "dayOne": "día restante",
+    "daysMany": "días restantes",
+    "body": "Lifetime mantiene el espacio Enterprise completo, los controles white label, el acceso del equipo y las futuras actualizaciones estándar sin pagos recurrentes de licencia.",
+    "buyLifetime": "Comprar Lifetime",
+    "remindTomorrow": "Recordármelo mañana",
+    "close": "Cerrar"
+  },
+  "migration": {
+    "eyebrow": "MIGRACIÓN SEGURA", "title": "Mover Flirexa a otro servidor", "intro": "Flirexa instala un destino limpio, transfiere una copia verificada y mueve la licencia solo después de comprobar el panel nuevo.",
+    "cleanTarget": "Use un servidor limpio", "cleanTargetHint": "El destino debe ser x86_64, tener 2 GB de memoria, 3 GB libres y no contener una instalación de Flirexa.",
+    "host": "IP o nombre del destino", "port": "Puerto SSH", "user": "Usuario SSH", "auth": "Autenticación", "password": "Contraseña", "key": "Clave privada", "fingerprint": "Huella SSH", "confirmFingerprint": "He verificado la huella y confío en este servidor", "checking": "Comprobando…", "test": "Probar conexión", "prepare": "Preparar destino", "preflightOk": "El destino es compatible",
+    "readyTitle": "El destino está listo", "readyText": "El origen sigue activo. El cambio bloquea brevemente las modificaciones, restaura el último estado verificado, transfiere la licencia y comprueba el destino.", "confirmCutover": "Entiendo que la dirección antigua dejará de atender clientes después del cambio", "cutover": "Cambiar al servidor nuevo",
+    "completeTitle": "El servidor nuevo está activo", "rollbackText": "El servidor antiguo está aislado. Puede volver antes del límite; la licencia nunca funciona en ambos servidores.", "addressTitle": "Dirija los clientes al servidor nuevo", "addressText": "Actualice el DNS del dominio a la dirección de destino. Las aplicaciones oficiales reciben el nuevo endpoint VPN al actualizar la configuración. Las configuraciones descargadas manualmente deben descargarse de nuevo.", "rollback": "Volver al servidor antiguo", "rollbackConfirm": "¿Devolver la licencia y el servicio al servidor antiguo?", "finalise": "Finalizar migración", "cancel": "Cancelar migración", "cancelConfirm": "¿Cancelar esta migración preparada?", "recoveryTitle": "Debe confirmarse la transferencia de licencia", "recoveryText": "Flirexa mantuvo aislado el servidor anterior porque no pudo confirmar el propietario de la licencia. La recuperación segura comprobará primero el servicio de licencias y el destino.", "recover": "Restaurar con seguridad el servidor anterior",
+    "step_backup": "Copia", "step_install": "Instalación", "step_transfer": "Transferencia", "step_restore": "Restauración", "step_license": "Licencia", "step_cutover": "Cambio", "step_rollback": "Retorno", "step_failed": "Error",
+    "status_idle": "Sin iniciar", "status_preparing": "Preparando", "status_ready": "Listo", "status_cutting_over": "Cambiando", "status_cutover": "Destino activo", "status_rolling_back": "Volviendo", "status_rolled_back": "Restaurado", "status_recovery_required": "Recuperación necesaria", "status_failed": "Error", "status_finalised": "Finalizado"
   },
   "navgrp": {
     "overview": "Resumen",

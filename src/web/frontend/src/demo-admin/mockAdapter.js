@@ -94,26 +94,31 @@ const portalUsers = demoClients.slice(0, 24).map((client, index) => ({
   is_active: true,
   balance: Number((index % 5) * 4.25).toFixed(2),
   balance_usd: Number((index % 5) * 4.25).toFixed(2),
-  subscription_tier: index % 5 === 0 ? 'team' : index % 3 === 0 ? 'annual' : 'monthly',
+  // Emma is the primary customer shown across both demo applications.  Keep
+  // her record deliberately stable so the admin and portal tours never
+  // contradict one another.
+  tier: index === 0 ? 'premium' : index % 5 === 0 ? 'team' : index % 3 === 0 ? 'premium' : 'essential',
+  subscription_tier: index === 0 ? 'premium' : index % 5 === 0 ? 'team' : index % 3 === 0 ? 'premium' : 'essential',
   subscription_status: 'active',
   subscription_expires_at: new Date(now + (20 + index) * 86_400_000).toISOString(),
   devices_count: index % 3 + 1,
   traffic_used_bytes: client.traffic_used_rx + client.traffic_used_tx,
   created_at: new Date(now - (70 - index) * 86_400_000).toISOString(),
+  last_login: isoAgo(18 + index * 19),
 }))
 
 const tariffs = [
-  { id: 1, name: 'Monthly', tier: 'monthly', price_usd: 4.99, duration_days: 30, max_devices: 2, traffic_limit_gb: 250, bandwidth_limit_mbps: 100, is_active: true, sort_order: 1, subscribers_count: 3792 },
-  { id: 2, name: 'Annual', tier: 'annual', price_usd: 39.99, duration_days: 365, max_devices: 5, traffic_limit_gb: null, bandwidth_limit_mbps: null, is_active: true, sort_order: 2, subscribers_count: 3166 },
-  { id: 3, name: 'Team', tier: 'team', price_usd: 12.99, duration_days: 30, max_devices: 10, traffic_limit_gb: null, bandwidth_limit_mbps: null, is_active: true, sort_order: 3, subscribers_count: 1019 },
+  { id: 1, name: 'Essential', tier: 'essential', price_usd: 3, duration_days: 30, max_devices: 1, traffic_limit_gb: 100, bandwidth_limit_mbps: 100, is_active: true, sort_order: 1, subscribers_count: 1200 },
+  { id: 2, name: 'Premium', tier: 'premium', price_usd: 4, duration_days: 30, max_devices: 5, traffic_limit_gb: 250, bandwidth_limit_mbps: 300, is_active: true, sort_order: 2, subscribers_count: 6377 },
+  { id: 3, name: 'Team', tier: 'team', price_usd: 7, duration_days: 30, max_devices: 15, traffic_limit_gb: null, bandwidth_limit_mbps: null, is_active: true, sort_order: 3, subscribers_count: 400 },
 ]
 
 const payments = portalUsers.slice(0, 18).map((user, index) => ({
   id: 7001 + index,
   user_id: user.id,
   email: user.email,
-  amount: index % 3 === 1 ? 39.99 : index % 3 === 2 ? 12.99 : 4.99,
-  amount_usd: index % 3 === 1 ? 39.99 : index % 3 === 2 ? 12.99 : 4.99,
+  amount: index % 3 === 1 ? 4 : index % 3 === 2 ? 7 : 3,
+  amount_usd: index % 3 === 1 ? 4 : index % 3 === 2 ? 7 : 3,
   provider: ['stripe', 'paypal', 'crypto', 'balance'][index % 4],
   status: index === 7 ? 'pending' : 'paid',
   created_at: isoAgo(index * 19 + 4),
@@ -144,7 +149,7 @@ const status = {
   system: { cpu_percent: 28, memory_percent: 46, disk_percent: 34 },
 }
 
-const revenue = { revenue_30d: '31908.00', total_revenue: '281704.00', active_subscriptions: 7977, total_users: 8309 }
+const revenue = { revenue_30d: '31908.00', total_revenue: '382896.00', active_subscriptions: 7977, total_users: 8309 }
 
 const healthServers = demoServers.map((server, index) => ({
   server_id: server.id,
@@ -197,6 +202,13 @@ export function createDemoAdapter() {
       branding_logo_url: '/assets/flirexa-logo-globe-v2-transparent.png',
       branding_favicon_url: '/assets/flirexa-logo-globe-v2-transparent.png',
       branding_powered_by: false, branding_github_card: false, branding_primary_color: '#6366f1',
+    })
+    if (url === '/auth/me') return response(config, {
+      id: 1,
+      username: 'admin',
+      role: 'admin',
+      is_superadmin: true,
+      permissions: [],
     })
     if (url === '/system/dashboard') return response(config, { status, clients: { total: 7977, items: demoClients.slice(0, 10) }, servers: { total: 17, items: demoServers }, revenue, charts: chartData })
     if (url === '/system/status') return response(config, status)

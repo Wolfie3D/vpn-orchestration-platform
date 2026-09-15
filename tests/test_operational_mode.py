@@ -11,6 +11,7 @@ from src.modules.operational_mode import (
     ExplicitMaintenanceState,
     classify_api_request,
     derive_license_mode,
+    is_migration_standby_request_allowed,
     is_request_allowed,
     resolve_operational_mode,
     set_maintenance_mode,
@@ -63,12 +64,26 @@ def test_set_maintenance_mode_writes_state_and_audit(monkeypatch):
 
 def test_request_policy_maintenance_vs_recovery():
     assert classify_api_request("/api/v1/updates/apply", "POST") == "recovery"
+    assert classify_api_request("/api/v1/panel-migration/rollback", "POST") == "recovery"
     assert classify_api_request("/api/v1/clients", "POST") == "business_mutation"
     allowed, _ = is_request_allowed("maintenance", "/api/v1/updates/apply", "POST")
     assert allowed is True
     allowed, reason = is_request_allowed("maintenance", "/api/v1/clients", "POST")
     assert allowed is False
     assert reason is not None
+
+
+def test_migration_standby_allows_rollback_but_blocks_second_writer_actions():
+    assert is_migration_standby_request_allowed(
+        "/api/v1/panel-migration/rollback", "POST"
+    )
+    assert is_migration_standby_request_allowed("/api/v1/auth/login", "POST")
+    assert is_migration_standby_request_allowed("/api/v1/clients", "GET")
+    assert not is_migration_standby_request_allowed(
+        "/api/v1/system/activation", "POST"
+    )
+    assert not is_migration_standby_request_allowed("/api/v1/updates/apply", "POST")
+    assert not is_migration_standby_request_allowed("/api/v1/clients", "POST")
 
 
 def test_request_policy_license_expired_readonly_allows_restore_but_blocks_business_mutation():

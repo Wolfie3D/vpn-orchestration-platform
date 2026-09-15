@@ -299,6 +299,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { d2confirm } from '../ui/confirm'
 import { useI18n } from 'vue-i18n'
+import { translateGlobal } from '../../i18n/translate'
 import { useClientsStore } from '../../stores/clients'
 import { useRoute } from 'vue-router'
 import { clientsApi, serversApi, segmentsApi, trafficApi } from '../../api'
@@ -313,7 +314,7 @@ import D2Countdown from '../ui/D2Countdown.vue'
 import D2MobileSheet from '../ui/D2MobileSheet.vue'
 
 const { t } = useI18n({ useScope: 'global' })
-function tr(k, p) { try { const v = t(k, p || {}); return v === k ? '' : v } catch (_) { return '' } }
+function tr(k, p) { try { return translateGlobal(k, p || {}) } catch (_) { return '' } }
 const store = useClientsStore()
 const ui = useD2Ui()
 const route = useRoute()

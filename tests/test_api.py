@@ -50,6 +50,14 @@ from src.modules.subscription.subscription_models import (
 @pytest.fixture
 def app_with_db():
     """Create test app with in-memory SQLite database"""
+    # The source tree intentionally contains the production public key.  A
+    # plain LICENSE_CHECK_ENABLED=false must therefore be ignored by runtime
+    # security, so integration tests explicitly emulate a development tree
+    # without signing material instead of weakening the application gate.
+    public_key_patch = patch(
+        "src.modules.license.manager._find_public_key", return_value=None
+    )
+    public_key_patch.start()
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -105,6 +113,7 @@ def app_with_db():
 
     Base.metadata.drop_all(bind=engine)
     engine.dispose()
+    public_key_patch.stop()
 
 
 @pytest.fixture

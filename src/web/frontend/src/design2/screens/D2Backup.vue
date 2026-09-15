@@ -209,13 +209,14 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { d2confirm } from '../ui/confirm'
 import { useI18n } from 'vue-i18n'
+import { translateGlobal } from '../../i18n/translate'
 import { backupApi } from '../../api'
 import { formatBytes, formatDate } from '../../utils'
 import { useD2Ui } from '../../stores/d2ui'
 import D2MobileSheet from '../ui/D2MobileSheet.vue'
 
 const { t } = useI18n({ useScope: 'global' })
-function tr(k) { try { const v = t(k); return v === k ? '' : v } catch (_) { return '' } }
+function tr(k) { try { return translateGlobal(k) } catch (_) { return '' } }
 const ui = useD2Ui()
 const backups = ref([])
 const loading = ref(false)

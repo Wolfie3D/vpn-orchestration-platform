@@ -41,6 +41,7 @@ def test_upgrade_payload_uses_current_public_plan_names():
     assert feature_required_detail("dns_policy_advanced")["upgrade_tier"] == "enterprise"
     assert feature_required_detail("app_integration")["upgrade_tier"] == "enterprise"
     assert feature_required_detail("white_label_basic")["upgrade_tier"] == "enterprise"
+    assert feature_required_detail("server_migration")["upgrade_tier"] == "enterprise"
 
 
 def test_business_cannot_infer_appearance_or_app_entitlements():
@@ -68,20 +69,59 @@ def test_design2_locks_enterprise_appearance_and_apps_with_common_prompt():
     assert "flirexa:upgrade-required" in source
 
 
-def test_free_allows_one_local_wireguard_and_one_local_amneziawg():
-    info = _license(LicenseType.FREE, max_servers=2, features=("wireguard", "amneziawg"))
+def test_whole_panel_move_lives_inside_settings_and_is_enterprise_only():
+    nav = Path("src/web/frontend/src/design2/nav.js").read_text(encoding="utf-8")
+    settings = Path("src/web/frontend/src/design2/screens/D2Settings.vue").read_text(encoding="utf-8")
+    router = Path("src/web/frontend/src/router/index.js").read_text(encoding="utf-8")
+    demo = Path("src/web/frontend/src/demo-admin/mockAdapter.js").read_text(encoding="utf-8")
+    assert "path: '/panel-migration'" not in nav
+    assert "items: ['apps', 'dns', 'plugins', 'backup', 'updates', 'settings']" in nav
+    assert "<D2PanelMigration v-if=\"isSetMigration\" embedded />" in settings
+    assert "enterpriseOnly: true" in settings
+    assert "canUsePanelMigration" in settings
+    assert "await authApi.me()" in settings
+    assert "installationOwner.value = Boolean(data?.is_superadmin)" in settings
+    assert "migrationAccessLoaded.value" in settings
+    assert "tokenBelongsToInstallationOwner" not in settings
+    assert "redirect: { path: '/settings', query: { section: 'migration' } }" in router
+    assert "if (url === '/auth/me')" in demo
+    assert "is_superadmin: true" in demo
+
+
+def test_whole_panel_move_rejects_business_even_with_explicit_legacy_flag():
+    from src.api.routes.panel_migration import require_non_trial_migration_license
+
+    business = _license(
+        LicenseType.BUSINESS,
+        max_servers=10,
+        features=("server_migration",),
+    )
+    with patch(
+        "src.api.middleware.license_gate.ensure_current_license_feature",
+        return_value=business,
+    ), pytest.raises(HTTPException) as exc:
+        require_non_trial_migration_license()
+    assert exc.value.status_code == 403
+    assert "Enterprise" in str(exc.value.detail)
+
+
+def test_community_allows_one_local_wireguard_or_amneziawg():
+    info = _license(LicenseType.FREE, max_servers=1, features=("wireguard", "amneziawg"))
     _enforce_server_creation_entitlement(
         info, current_count=0, same_type_count=0,
         server_type="wireguard", is_remote=False,
     )
-    _enforce_server_creation_entitlement(
-        info, current_count=1, same_type_count=0,
-        server_type="amneziawg", is_remote=False,
+    _blocked(
+        lambda: _enforce_server_creation_entitlement(
+            info, current_count=1, same_type_count=0,
+            server_type="amneziawg", is_remote=False,
+        ),
+        "multi_server", "starter",
     )
 
 
-def test_free_cannot_add_remote_duplicate_or_proxy_server():
-    info = _license(LicenseType.FREE, max_servers=2, features=("wireguard", "amneziawg"))
+def test_community_cannot_add_remote_duplicate_or_proxy_server():
+    info = _license(LicenseType.FREE, max_servers=1, features=("wireguard", "amneziawg"))
     _blocked(
         lambda: _enforce_server_creation_entitlement(
             info, current_count=0, same_type_count=0,
@@ -94,7 +134,7 @@ def test_free_cannot_add_remote_duplicate_or_proxy_server():
             info, current_count=1, same_type_count=1,
             server_type="wireguard", is_remote=False,
         ),
-        "multi_server", "business",
+        "multi_server", "starter",
     )
     _blocked(
         lambda: _enforce_server_creation_entitlement(

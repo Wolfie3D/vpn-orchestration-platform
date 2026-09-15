@@ -138,6 +138,8 @@ def build_parser() -> argparse.ArgumentParser:
     restore.add_argument("--from-dir", help="directory containing the restore archive")
     restore.add_argument("--yes", action="store_true", help="confirm destructive restore")
     restore.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    restore.add_argument("--migration-standby", action="store_true", help="restore as a fenced migration target")
+    restore.add_argument("--migration-instance-id", help="new target instance id used with --migration-standby")
 
     clients_parser = subparsers.add_parser("clients", help="client integrity operations")
     clients_subparsers = clients_parser.add_subparsers(dest="clients_command", required=True)
@@ -246,6 +248,8 @@ def main(argv: list[str] | None = None) -> int:
         result = create_restore_command(
             archive=getattr(args, "archive", None),
             from_dir=getattr(args, "from_dir", None),
+            migration_standby=getattr(args, "migration_standby", False),
+            migration_instance_id=getattr(args, "migration_instance_id", None),
         )
         if json_output or getattr(args, "json", False):
             print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))

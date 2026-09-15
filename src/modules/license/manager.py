@@ -89,10 +89,8 @@ _FEATURE_ALIASES: dict[str, tuple[str, ...]] = {
     # entitlement so existing paying customers get the feature on update
     # without re-issuing their key.
     "mikrotik_adapter":   ("multi_server",),
-    # `nowpayments` (NOWPayments / crypto) is universal — FREE through
-    # Enterprise. New tier defs list it explicitly, but older signed
-    # licences predate the listing. Any Standard+ marker is sufficient.
-    # FREE customers get it from the FREE tier def directly.
+    # NOWPayments starts at Starter. Older paid keys predate the explicit
+    # feature flag, so their Standard+/Business marker remains sufficient.
     "nowpayments":        ("multi_server", "proxy_protocols"),
     # `payments` (full payment-provider suite — Stripe, Mollie, PayMe,
     # Razorpay, PayPal) is Pro+ only. The bug-fixed alias from `nowpayments`
@@ -112,6 +110,10 @@ _FEATURE_ALIASES: dict[str, tuple[str, ...]] = {
     # Pro+ tier features. Legacy keys with `multi_server` get them all.
     "auto_backup":        ("multi_server",),
     "traffic_rules":      ("multi_server",),
+    # User-installable plugins are a Business capability. Older Business
+    # keys already carry the multi_server marker, so keep them entitled after
+    # the catalogue gains the explicit feature name.
+    "plugins":            ("multi_server",),
     # Appearance and the official app package are Enterprise-only for new
     # licences.  Some already-sold Business keys explicitly carry
     # `white_label_basic` and/or `android_app`; honour only those signed flags
@@ -130,6 +132,10 @@ _FEATURE_ALIASES: dict[str, tuple[str, ...]] = {
     # keys had already been sold.  `white_label` is the legacy
     # Enterprise-only marker, so it is safe to use as the compatibility proof.
     "app_integration":    ("white_label", "android_app"),
+    # Whole-panel migration is Enterprise-only. Older Enterprise keys predate
+    # the explicit flag but always carry the Enterprise-only `white_label`
+    # marker. Do not derive this from a generic paid/Business capability.
+    "server_migration":   ("white_label",),
 }
 
 
@@ -222,22 +228,18 @@ LICENSE_TIERS = {
     #     (operational features that are functionally free across all tiers).
     #   • `telegram_bots` covers the built-in bot runtime on every tier;
     #     `telegram_client_bot` separately gates the paid self-service plugin.
-    #   • Split crypto-only NOWPayments from full payment-provider suite:
-    #     `nowpayments` is on FREE and every paid tier; `payments` is Pro+
-    #     only (card processors are paid plugins from flirexa-pro).
+    #   • Payment and client-portal features start at Starter. Community
+    #     Edition is intentionally an on-box, operator-only core.
     #   • Appearance controls and official customer apps are Enterprise-only.
     LicenseType.FREE: {
-        "max_clients": 80,
-        # FREE: one server per protocol (WireGuard + AmneziaWG = up to 2).
-        # Per-protocol enforcement happens in the server-create endpoint.
-        "max_servers": 2,
+        "max_clients": 20,
+        # Community Edition runs one local WireGuard *or* AmneziaWG server.
+        "max_servers": 1,
         # FREE tier never expires — no duration_days
         "features": [
             "wireguard",
             "amneziawg",
-            "client_portal",
             "telegram_bots",
-            "nowpayments",
         ]
     },
     LicenseType.TRIAL: {
@@ -283,6 +285,7 @@ LICENSE_TIERS = {
             "promo_codes",
             "auto_renewal",
             "dns_protection",
+            "plugins",
         ],
     },
     # Old tier names — STARTER/BUSINESS map to STANDARD/PRO conceptually,
@@ -321,6 +324,7 @@ LICENSE_TIERS = {
             "promo_codes",
             "auto_renewal",
             "dns_protection",
+            "plugins",
         ]
     },
     LicenseType.ENTERPRISE: {
@@ -349,6 +353,8 @@ LICENSE_TIERS = {
             "app_integration",
             "dns_protection",
             "dns_policy_advanced",
+            "plugins",
+            "server_migration",
         ]
     },
 }
@@ -1010,6 +1016,13 @@ class LicenseManager:
     def get_status(self) -> Dict[str, Any]:
         """Get license status summary"""
         license_info = self.get_license_info()
+        is_trial = license_info.is_trial()
+        trial_duration_days = None
+        if is_trial and license_info.issued_at and license_info.expires_at:
+            duration_seconds = (
+                license_info.expires_at - license_info.issued_at
+            ).total_seconds()
+            trial_duration_days = max(1, int(round(duration_seconds / 86400)))
 
         # Expose "effective" features to the UI — raw features + any
         # canonical flag whose alias is present. Without this expansion the
@@ -1033,6 +1046,8 @@ class LicenseManager:
             "owner_name":   license_info.owner_name,
             "owner_email":  license_info.owner_email,
             "is_valid":     license_info.is_valid,
+            "is_trial":     is_trial,
+            "trial_duration_days": trial_duration_days,
             "max_clients":  license_info.max_clients,
             "max_servers":  license_info.max_servers,
             "features":     effective,

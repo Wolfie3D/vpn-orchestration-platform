@@ -1,4 +1,4 @@
-"""Tests for FREE tier (open-core mode).
+"""Tests for Community Edition (open-core mode).
 
 Verifies that LicenseManager correctly enters FREE mode when no LICENSE_KEY
 is present, and that FREE mode never makes network calls or expires.
@@ -43,11 +43,10 @@ class TestFreeTierConfiguration:
 
     def test_free_limits(self):
         free = LICENSE_TIERS[LicenseType.FREE]
-        assert free["max_clients"] == 80
-        # FREE = up to 2 servers: one LOCAL wireguard + one LOCAL amneziawg on
-        # the install box. Remote/agent servers + proxy protocols are paid-only
-        # (enforced at runtime by enforcement.reconcile, not by this count).
-        assert free["max_servers"] == 2
+        assert free["max_clients"] == 20
+        # Community Edition = one LOCAL WireGuard or AmneziaWG server.
+        # Remote/agent servers + proxy protocols are paid-only.
+        assert free["max_servers"] == 1
 
     def test_free_no_expiry(self):
         # FREE must not have a duration_days key — it never expires.
@@ -61,12 +60,24 @@ class TestFreeTierConfiguration:
 
     def test_free_features_exclude_paid(self):
         free = LICENSE_TIERS[LicenseType.FREE]
-        # These features must be paid-only.
-        assert "hysteria2" not in free["features"]
-        assert "tuic" not in free["features"]
-        assert "multi_server" not in free["features"]
-        assert "white_label" not in free["features"]
-        assert "corporate_vpn" not in free["features"]
+        # Community is deliberately an operator-only core.  Keep this list
+        # exhaustive: a future feature must not silently turn Community into a
+        # commercial deployment just because its UI was hidden instead of
+        # being entitlement-gated.  ``telegram_bots`` remains present because
+        # it is the built-in *operator* bot runtime; the customer self-service
+        # bot has its own paid ``telegram_client_bot`` entitlement.
+        commercial_only = {
+            "hysteria2", "tuic", "vless_reality", "proxy_protocols",
+            "multi_server", "client_portal", "nowpayments", "payments",
+            "account_balance", "telegram_client_bot", "promo_codes",
+            "referral", "white_label", "white_label_basic", "android_app",
+            "app_integration", "corporate_vpn", "manager_rbac",
+            "dns_protection", "dns_policy_advanced", "plugins",
+            "traffic_rules", "auto_backup", "mikrotik_adapter",
+            "auto_renewal", "commercial_analytics",
+        }
+        assert commercial_only.isdisjoint(free["features"])
+        assert "telegram_bots" in free["features"]
 
 
 class TestLicenseManagerFreeMode:
@@ -149,19 +160,19 @@ class TestLicenseManagerLimits:
         mgr = LicenseManager(license_key=None)
         result = mgr.check_limits(current_clients=10, current_servers=0)
         assert result["within_limits"] is True
-        assert result["clients"]["available"] == 70   # 80 - 10
-        assert result["servers"]["available"] == 2    # 2 - 0
+        assert result["clients"]["available"] == 10   # 20 - 10
+        assert result["servers"]["available"] == 1    # 1 - 0
 
     def test_check_limits_at_client_limit(self):
         mgr = LicenseManager(license_key=None)
-        result = mgr.check_limits(current_clients=80, current_servers=0)
+        result = mgr.check_limits(current_clients=20, current_servers=0)
         assert result["within_limits"] is False
         assert result["clients"]["at_limit"] is True
         assert result["clients"]["available"] == 0
 
     def test_check_limits_at_server_limit(self):
         mgr = LicenseManager(license_key=None)
-        result = mgr.check_limits(current_clients=10, current_servers=2)  # FREE = 2
+        result = mgr.check_limits(current_clients=10, current_servers=1)
         assert result["within_limits"] is False
         assert result["servers"]["at_limit"] is True
         assert result["servers"]["available"] == 0
@@ -169,15 +180,14 @@ class TestLicenseManagerLimits:
     def test_can_add_client_within_limit(self):
         mgr = LicenseManager(license_key=None)
         info = mgr.validate_license()
-        assert info.can_add_client(50) is True
-        assert info.can_add_client(80) is False
+        assert info.can_add_client(19) is True
+        assert info.can_add_client(20) is False
 
     def test_can_add_server_within_limit(self):
         mgr = LicenseManager(license_key=None)
         info = mgr.validate_license()
-        assert info.can_add_server(0) is True   # FREE allows up to 2
-        assert info.can_add_server(1) is True
-        assert info.can_add_server(2) is False
+        assert info.can_add_server(0) is True
+        assert info.can_add_server(1) is False
 
 
 class TestFreeModeDoesNotMakeNetworkCalls:
@@ -210,7 +220,7 @@ class TestStatus:
         assert status["plan"] == "free"
         assert status["billing_type"] == "free"
         assert status["is_valid"] is True
-        assert status["max_clients"] == 80
-        assert status["max_servers"] == 2
+        assert status["max_clients"] == 20
+        assert status["max_servers"] == 1
         assert status["expires_at"] is None
         assert status["days_remaining"] is None

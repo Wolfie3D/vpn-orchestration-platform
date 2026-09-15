@@ -24,6 +24,7 @@ BUSINESS_FEATURES = {
     "promo_codes",
     "auto_renewal",
     "dns_protection",
+    "plugins",
 }
 
 ENTERPRISE_ONLY_FEATURES = {
@@ -34,6 +35,7 @@ ENTERPRISE_ONLY_FEATURES = {
     "manager_rbac",
     "app_integration",
     "dns_policy_advanced",
+    "server_migration",
 }
 
 

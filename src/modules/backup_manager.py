@@ -15,6 +15,7 @@ Archive layout:
       wg_config_1_name.conf
     system/
       version.txt
+      plugin_states.json  # optional operator plugin switches
 
 Legacy format v1: backup_YYYYMMDD_HHMMSS/ directories (read-only, listed alongside v2)
 """
@@ -38,6 +39,7 @@ from sqlalchemy.orm import Session, load_only
 from loguru import logger
 
 from src.database.models import Server, Client, AuditLog, AuditAction
+from src.modules.plugin_loader.state import plugin_state_path
 from src.utils.runtime_paths import get_app_version, get_backup_root
 
 
@@ -386,7 +388,7 @@ class BackupManager:
         pg = _pg_params_from_env_file(env_path)
         if not pg or not pg.get("password"):
             return
-        if pg["host"] not in {"127.0.0.1", "::1"}:
+        if pg["host"].lower() not in {"localhost", "127.0.0.1", "::1"}:
             return
 
         user = pg["user"].replace('"', '""')
@@ -473,6 +475,7 @@ class BackupManager:
             "hostname": socket.gethostname(),
             "database_dump": False,
             "env_backed_up": False,
+            "plugin_states_backed_up": False,
             "server_count": 0,
             "client_count": 0,
             "servers": [],
@@ -514,6 +517,20 @@ class BackupManager:
                 metadata["errors"].append(
                     "Environment file not found; full disaster recovery is incomplete"
                 )
+
+            # Operator plugin switches are persistent runtime state. Keep them
+            # separate from .env so an enable/disable action never rewrites
+            # credentials, but include the file in full disaster recovery.
+            plugin_state_src = plugin_state_path()
+            if plugin_state_src.is_file():
+                plugin_state_dst = os.path.join(inner, "system", "plugin_states.json")
+                try:
+                    shutil.copy2(plugin_state_src, plugin_state_dst)
+                    os.chmod(plugin_state_dst, 0o600)
+                    metadata["plugin_states_backed_up"] = True
+                    metadata["checksums"]["system/plugin_states.json"] = _sha256(plugin_state_dst)
+                except Exception as e:
+                    metadata["errors"].append(f"Plugin state backup failed: {e}")
 
             # 3. Local WireGuard + AmneziaWG configs
             for wg_src_dir in ("/etc/wireguard", "/etc/amnezia/amneziawg"):
@@ -866,6 +883,7 @@ class BackupManager:
         backup_id: str,
         restart_services: bool = True,
         stop_services: bool = True,
+        post_env_overrides: dict[str, str] | None = None,
         audit_user_type: str = "admin",
         audit_source: str = "system",
         audit_actor: str | None = None,
@@ -889,6 +907,7 @@ class BackupManager:
             "database_restored": False,
             "env_restored": False,
             "database_credentials_synced": False,
+            "plugin_states_restored": False,
             "wireguard_restored": [],
             "services_restarted": False,
             "errors": [],
@@ -984,6 +1003,24 @@ class BackupManager:
                 except Exception as e:
                     result["errors"].append(f".env restore failed: {e}")
 
+            # Older archives legitimately have no plugin state file and fall
+            # back to manifest/.env defaults. New archives restore the saved
+            # operator choice atomically before services are restarted.
+            plugin_state_src = os.path.join(inner, "system", "plugin_states.json")
+            if os.path.isfile(plugin_state_src):
+                try:
+                    plugin_state_dst = plugin_state_path()
+                    plugin_state_dst.parent.mkdir(parents=True, exist_ok=True)
+                    plugin_state_tmp = plugin_state_dst.with_name(
+                        f".{plugin_state_dst.name}.restore.tmp"
+                    )
+                    shutil.copy2(plugin_state_src, plugin_state_tmp)
+                    os.chmod(plugin_state_tmp, 0o600)
+                    os.replace(plugin_state_tmp, plugin_state_dst)
+                    result["plugin_states_restored"] = True
+                except Exception as e:
+                    result["errors"].append(f"Plugin state restore failed: {e}")
+
             # 3. Restore local WireGuard + AmneziaWG configs
             wg_src_dir = os.path.join(inner, "wireguard")
             if os.path.isdir(wg_src_dir):
@@ -1002,6 +1039,32 @@ class BackupManager:
                         logger.info(f"Restored config: {conf.name} → {target_dir}")
                     except Exception as e:
                         result["errors"].append(f"Config {conf.name} restore failed: {e}")
+
+            # Migration restore may intentionally fence the target before any
+            # service is allowed to restart.  Apply these values only after the
+            # archived .env has been restored, otherwise the archive would
+            # overwrite the standby marker and duplicate workers/bots could run.
+            if post_env_overrides:
+                env_dst = self._find_env_file()
+                if not env_dst:
+                    result["errors"].append("Post-restore environment file not found")
+                else:
+                    try:
+                        content = Path(env_dst).read_text(encoding="utf-8")
+                        for key, value in post_env_overrides.items():
+                            line = f"{key}={value}"
+                            pattern = rf"^{re.escape(key)}=.*$"
+                            if re.search(pattern, content, flags=re.MULTILINE):
+                                content = re.sub(pattern, line, content, flags=re.MULTILINE)
+                            else:
+                                content = content.rstrip("\n") + "\n" + line + "\n"
+                        tmp_env = Path(env_dst).with_suffix(".migration.tmp")
+                        tmp_env.write_text(content, encoding="utf-8")
+                        os.chmod(tmp_env, 0o600)
+                        os.replace(tmp_env, env_dst)
+                        result["post_env_overrides"] = sorted(post_env_overrides)
+                    except Exception as e:
+                        result["errors"].append(f"Post-restore environment update failed: {e}")
 
             # 4. Restart services
             if restart_services:

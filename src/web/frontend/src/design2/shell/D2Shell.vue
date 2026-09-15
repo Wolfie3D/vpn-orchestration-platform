@@ -137,7 +137,7 @@
 
       <div class="d2-content" style="flex:1;min-width:0;padding:22px">
         <router-view v-slot="{ Component }">
-          <component :is="Component" />
+          <component :is="Component" :key="`${route.fullPath}:${languageEpoch}`" />
         </router-view>
       </div>
     </main>
@@ -150,6 +150,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { setTranslationLocale, translateGlobal } from '../../i18n/translate'
 import { useSystemStore } from '../../stores/system'
 import { useBrandingStore } from '../../stores/branding'
 import { useLicenseStore } from '../../stores/license'
@@ -181,7 +182,11 @@ function accessFromToken() {
   }
 }
 const access = ref(accessFromToken())
+const LICENSE_RECOVERY_NAV = new Set(['updates', 'settings'])
 function canAccess(item) {
+  if (license.blocked && !LICENSE_RECOVERY_NAV.has(item.key)) return false
+  if (item.enterpriseOnly && String(license.plan || license.tier || '').toLowerCase() !== 'enterprise') return false
+  if (item.feature && (!license.loaded || !license.has(item.feature))) return false
   if (access.value.role !== 'manager' || access.value.isSuperadmin) return true
   if (item.ownerOnly) return false
   const granted = new Set(access.value.permissions || [])
@@ -197,9 +202,10 @@ const langOpen = ref(false)
 const mobileMenuOpen = ref(false)
 const mobileLangOpen = ref(false)
 const mobileSearchOpen = ref(false)
+const languageEpoch = ref(0)
 // Fail closed while licence state is loading. FREE/trial keep the optional
 // support button; every purchased tier hides it without a paid-user flash.
-const showDonate = computed(() => license.loaded && !license.isPaid)
+const showDonate = computed(() => license.loaded && !license.isPaid && !license.blocked)
 // i18n has en/ru/de/fr/es (see i18n/index.js); persist choice in sb_lang like Legacy.
 const LOCALES = [
   { code: 'en', label: 'English' }, { code: 'ru', label: 'Русский' },
@@ -207,7 +213,7 @@ const LOCALES = [
 ]
 
 const i18n = useI18n({ useScope: 'global' })
-function tr(k) { try { const v = i18n.t(k); return v === k ? '' : v } catch (_) { return '' } }
+function tr(k) { try { return translateGlobal(k) } catch (_) { return '' } }
 const ICONSET = new Set(['grid', 'activity', 'users', 'layers', 'server', 'pulse', 'heart', 'card', 'receipt', 'trendup', 'wallet', 'crown', 'user', 'tag', 'chat', 'bell', 'bot', 'gauge', 'lock', 'box', 'database', 'download', 'gear', 'list', 'terminal', 'sun', 'moon', 'logout', 'search', 'plus'])
 function hasIcon(n) { return ICONSET.has(n) }
 
@@ -227,7 +233,16 @@ function toggleTheme() { system.setTheme(system.theme === 'dark' ? 'light' : 'da
 function donate() { donateOpen.value = true }
 const curLangCode = computed(() => i18n.locale.value || 'en')
 const curLang = computed(() => curLangCode.value.toUpperCase())
-function setLang(code) { i18n.locale.value = code; try { localStorage.setItem('sb_lang', code) } catch (_) {}; langOpen.value = false; mobileLangOpen.value = false; mobileMenuOpen.value = false }
+function setLang(code) {
+  i18n.locale.value = code
+  setTranslationLocale(code)
+  document.documentElement.lang = code
+  languageEpoch.value += 1
+  try { localStorage.setItem('sb_lang', code) } catch (_) {}
+  langOpen.value = false
+  mobileLangOpen.value = false
+  mobileMenuOpen.value = false
+}
 function logout() { mobileMenuOpen.value = false; mobileLangOpen.value = false; try { localStorage.removeItem('sb_token'); localStorage.removeItem('sb_refresh_token') } catch (_) {}; router.push('/login') }
 function onDoc() { acctOpen.value = false; langOpen.value = false; mobileLangOpen.value = false; mobileMenuOpen.value = false }
 function onMobileTableClick(e) {
@@ -245,7 +260,23 @@ function routeMatches(item, path = route.path) {
   return item.path === '/' ? path === '/' : path.startsWith(item.path)
 }
 function ensureAccessibleRoute() {
-  if (!access.value.loaded || access.value.role !== 'manager') return
+  if (!access.value.loaded || !license.loaded) return
+  const current = NAV_SECTIONS.flatMap(group => group.items).find(item => routeMatches(item))
+  const enterpriseDenied = current?.enterpriseOnly
+    && String(license.plan || license.tier || '').toLowerCase() !== 'enterprise'
+  if (enterpriseDenied || (current?.feature && !license.has(current.feature))) {
+    const fallback = accessibleItems.value.find(item => item.key === 'dashboard')?.path || '/'
+    if (route.path !== fallback) router.replace(fallback)
+    return
+  }
+  if (license.blocked) {
+    if (accessibleItems.value.some(item => routeMatches(item))) return
+    const recovery = accessibleItems.value.find(item => item.key === 'settings')
+      || accessibleItems.value.find(item => item.key === 'updates')
+    if (recovery && route.path !== recovery.path) router.replace(recovery.path)
+    return
+  }
+  if (access.value.role !== 'manager') return
   if (accessibleItems.value.some(item => routeMatches(item))) return
   const fallback = accessibleItems.value[0]?.path
   if (fallback && route.path !== fallback) router.replace(fallback)
@@ -288,6 +319,7 @@ async function refreshUpdateBadge() {
 }
 function _updOnFocus() { if (!document.hidden) refreshUpdateBadge() }
 watch(() => route.fullPath, () => { mobileMenuOpen.value = false; mobileLangOpen.value = false; mobileSearchOpen.value = false; ensureAccessibleRoute(); refreshUpdateBadge() })
+watch(() => [license.blocked, license.loaded, ...license.features], () => ensureAccessibleRoute())
 
 onMounted(() => {
   document.addEventListener('click', onDoc)
