@@ -1,0 +1,3572 @@
+PROJECT SYSTEM DUMP
+Root: /home/wolfie/projects/personal/flirexa/alembic
+
+Excluded directories: .cache, .git, .idea, .mypy_cache, .next, .pytest_cache, .tox, .venv, .vscode, __pycache__, build, dist, env, node_modules, venv
+Binary/unreadable files are listed but their bytes are not included.
+
+========================================================================================
+FILE: README
+========================================================================================
+Generic single-database configuration.
+
+========================================================================================
+FILE: env.py
+========================================================================================
+"""Alembic environment configuration for Flirexa."""
+import os
+import sys
+from logging.config import fileConfig
+
+from sqlalchemy import engine_from_config, pool
+from alembic import context
+
+# Add project root to path so we can import our models
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from src.database.models import Base  # noqa: E402
+
+# Alembic Config object
+config = context.config
+
+# Set DB URL from environment (same source as connection.py)
+database_url = os.getenv(
+    "DATABASE_URL",
+    "postgresql://vpnmanager:vpnmanager@localhost:5432/vpnmanager_db"
+)
+config.set_main_option("sqlalchemy.url", database_url)
+
+# Logging
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
+
+# Target metadata from our models — enables autogenerate
+target_metadata = Base.metadata
+
+
+def run_migrations_offline() -> None:
+    """Run migrations in 'offline' mode (generate SQL without DB connection)."""
+    url = config.get_main_option("sqlalchemy.url")
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+    )
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+def run_migrations_online() -> None:
+    """Run migrations in 'online' mode (execute against live DB)."""
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+    with connectable.connect() as connection:
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+        )
+        with context.begin_transaction():
+            context.run_migrations()
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
+
+========================================================================================
+FILE: project_system_dump.py
+========================================================================================
+#!/usr/bin/env python3
+"""Write one text file containing a readable snapshot of a project tree.
+
+Includes dotfiles and text-based secret/configuration files (for example .env).
+Keep the generated report private.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+
+
+SKIPPED_DIRECTORIES = {
+    ".git",
+    ".venv",
+    "venv",
+    "env",
+    "__pycache__",
+    "node_modules",
+    ".next",
+    ".cache",
+    "build",
+    "dist",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".tox",
+    ".idea",
+    ".vscode",
+}
+
+
+def read_text(path: Path) -> str | None:
+    """Return text content, or None for binary/unreadable files."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+
+    if b"\0" in data:
+        return None
+
+    for encoding in ("utf-8", "utf-8-sig", "utf-16"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            pass
+    return None
+
+
+def write_dump(root: Path, destination: Path) -> tuple[int, int]:
+    root = root.resolve()
+    destination = destination.resolve()
+    included = skipped = 0
+
+    with destination.open("w", encoding="utf-8", newline="\n") as report:
+        report.write(f"PROJECT SYSTEM DUMP\nRoot: {root}\n\n")
+        report.write("Excluded directories: " + ", ".join(sorted(SKIPPED_DIRECTORIES)) + "\n")
+        report.write("Binary/unreadable files are listed but their bytes are not included.\n\n")
+
+        for directory, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+            dir_path = Path(directory)
+            dirnames[:] = sorted(
+                name
+                for name in dirnames
+                if name not in SKIPPED_DIRECTORIES and not (dir_path / name).is_symlink()
+            )
+
+            for filename in sorted(filenames):
+                path = dir_path / filename
+                if path.resolve() == destination:
+                    continue
+                relative = path.relative_to(root).as_posix()
+                report.write("=" * 88 + "\n")
+                report.write(f"FILE: {relative}\n")
+                report.write("=" * 88 + "\n")
+
+                if path.is_symlink():
+                    report.write("[Skipped symbolic link]\n\n")
+                    skipped += 1
+                    continue
+
+                content = read_text(path)
+                if content is None:
+                    report.write("[Skipped binary or unreadable file]\n\n")
+                    skipped += 1
+                    continue
+
+                report.write(content)
+                if content and not content.endswith("\n"):
+                    report.write("\n")
+                report.write("\n")
+                included += 1
+
+    return included, skipped
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Create a single readable project dump.")
+    parser.add_argument("root", nargs="?", default=".", help="Project root (default: current directory)")
+    parser.add_argument(
+        "--output",
+        default="system_dump.txt",
+        help="Report path, relative to the current directory unless absolute",
+    )
+    args = parser.parse_args()
+
+    root = Path(args.root)
+    output = Path(args.output)
+    included, skipped = write_dump(root, output)
+    print(f"Created {output.resolve()} ({included} text files included; {skipped} files skipped).")
+
+
+if __name__ == "__main__":
+    main()
+
+========================================================================================
+FILE: script.py.mako
+========================================================================================
+"""${message}
+
+Revision ID: ${up_revision}
+Revises: ${down_revision | comma,n}
+Create Date: ${create_date}
+
+"""
+from typing import Sequence, Union
+
+from alembic import op
+import sqlalchemy as sa
+${imports if imports else ""}
+
+# revision identifiers, used by Alembic.
+revision: str = ${repr(up_revision)}
+down_revision: Union[str, Sequence[str], None] = ${repr(down_revision)}
+branch_labels: Union[str, Sequence[str], None] = ${repr(branch_labels)}
+depends_on: Union[str, Sequence[str], None] = ${repr(depends_on)}
+
+
+def upgrade() -> None:
+    """Upgrade schema."""
+    ${upgrades if upgrades else "pass"}
+
+
+def downgrade() -> None:
+    """Downgrade schema."""
+    ${downgrades if downgrades else "pass"}
+
+========================================================================================
+FILE: versions/001_baseline_existing_schema_snapshot.py
+========================================================================================
+"""baseline: existing schema snapshot
+
+This is a no-op migration that marks the starting point for Alembic.
+All existing tables were created by SQLAlchemy's create_all() and
+runtime _run_migrations() in connection.py.
+
+For existing databases: run `alembic stamp 001` to mark as current.
+For fresh installs: create_all() handles table creation, then stamp 001.
+
+Revision ID: 001
+Revises:
+Create Date: 2026-03-08
+"""
+from typing import Sequence, Union
+
+from alembic import op
+import sqlalchemy as sa
+
+
+revision: str = '001'
+down_revision: Union[str, Sequence[str], None] = None
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+
+
+def upgrade() -> None:
+    """No-op: baseline snapshot of existing schema."""
+    pass
+
+
+def downgrade() -> None:
+    """No-op: cannot downgrade from baseline."""
+    pass
+
+========================================================================================
+FILE: versions/002_consolidate_runtime_schema_migrations.py
+========================================================================================
+"""consolidate runtime schema migrations
+
+Replaces all runtime ALTER TABLE statements from connection.py _run_migrations().
+All operations are idempotent — safe to run on databases at any state.
+
+Revision ID: 002
+Revises: 001
+Create Date: 2026-03-08
+"""
+from typing import Sequence, Union
+
+from alembic import op
+from sqlalchemy import inspect, text
+import sqlalchemy as sa
+
+
+revision: str = '002'
+down_revision: Union[str, Sequence[str], None] = '001'
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+
+
+def _has_column(table: str, column: str) -> bool:
+    """Check if column exists in table (idempotent helper)."""
+    bind = op.get_bind()
+    insp = inspect(bind)
+    if table not in insp.get_table_names():
+        return True  # Table doesn't exist, skip
+    columns = [c['name'] for c in insp.get_columns(table)]
+    return column in columns
+
+
+def upgrade() -> None:
+    # -- servers: SSH and agent management columns --
+    if not _has_column('servers', 'ssh_host'):
+        op.add_column('servers', sa.Column('ssh_host', sa.String(255)))
+    if not _has_column('servers', 'ssh_port'):
+        op.add_column('servers', sa.Column('ssh_port', sa.Integer, server_default='22'))
+    if not _has_column('servers', 'ssh_user'):
+        op.add_column('servers', sa.Column('ssh_user', sa.String(50), server_default='root'))
+    if not _has_column('servers', 'ssh_password'):
+        op.add_column('servers', sa.Column('ssh_password', sa.Text))
+    if not _has_column('servers', 'agent_mode'):
+        op.add_column('servers', sa.Column('agent_mode', sa.String(10), server_default='ssh'))
+    if not _has_column('servers', 'agent_url'):
+        op.add_column('servers', sa.Column('agent_url', sa.String(255)))
+    if not _has_column('servers', 'agent_api_key'):
+        op.add_column('servers', sa.Column('agent_api_key', sa.Text))
+    if not _has_column('servers', 'max_bandwidth_mbps'):
+        op.add_column('servers', sa.Column('max_bandwidth_mbps', sa.Integer))
+
+    # -- clients: make private_key nullable, add auto bandwidth columns --
+    bind = op.get_bind()
+    insp = inspect(bind)
+    if 'clients' in insp.get_table_names():
+        try:
+            op.alter_column('clients', 'private_key', nullable=True)
+        except Exception:
+            pass  # Already nullable
+
+    if not _has_column('clients', 'auto_bandwidth_limit'):
+        op.add_column('clients', sa.Column('auto_bandwidth_limit', sa.Integer))
+    if not _has_column('clients', 'auto_bandwidth_rule_id'):
+        op.add_column('clients', sa.Column('auto_bandwidth_rule_id', sa.Integer))
+
+    # -- traffic_rules: per-client rule binding --
+    if not _has_column('traffic_rules', 'client_id'):
+        op.add_column('traffic_rules', sa.Column(
+            'client_id', sa.Integer,
+            sa.ForeignKey('clients.id', ondelete='CASCADE')
+        ))
+
+    # -- client_portal_subscriptions: notification dedup, auto-renew --
+    if not _has_column('client_portal_subscriptions', 'notification_sent_at'):
+        op.add_column('client_portal_subscriptions', sa.Column(
+            'notification_sent_at', sa.JSON, server_default='{}'
+        ))
+    if not _has_column('client_portal_subscriptions', 'auto_renew_failures'):
+        op.add_column('client_portal_subscriptions', sa.Column(
+            'auto_renew_failures', sa.Integer, server_default='0'
+        ))
+
+    # -- client_users: subscription token, password reset token --
+    if not _has_column('client_users', 'subscription_token'):
+        op.add_column('client_users', sa.Column(
+            'subscription_token', sa.String(64), unique=True
+        ))
+    if not _has_column('client_users', 'subscription_token_created_at'):
+        op.add_column('client_users', sa.Column(
+            'subscription_token_created_at', sa.DateTime
+        ))
+    if not _has_column('client_users', 'password_reset_token'):
+        op.add_column('client_users', sa.Column(
+            'password_reset_token', sa.String(255)
+        ))
+    if not _has_column('client_users', 'password_reset_token_created_at'):
+        op.add_column('client_users', sa.Column(
+            'password_reset_token_created_at', sa.DateTime
+        ))
+
+    # -- AuditAction enum: add backup values --
+    conn = op.get_bind()
+    try:
+        conn.execute(text("ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'backup_create'"))
+        conn.execute(text("ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'backup_restore'"))
+    except Exception:
+        pass  # Values already exist or enum not present
+
+
+def downgrade() -> None:
+    """Downgrade is intentionally limited — dropping columns risks data loss.
+    In practice, downgrade from this consolidation migration is not expected.
+    """
+    pass
+
+========================================================================================
+FILE: versions/003_amneziawg_support.py
+========================================================================================
+"""amneziawg support — server_type, awg obfuscation params, peer_visibility
+
+Revision ID: 003
+Revises: 002
+Create Date: 2026-03-14
+"""
+from typing import Sequence, Union
+
+from alembic import op
+from sqlalchemy import inspect
+import sqlalchemy as sa
+
+
+revision: str = '003'
+down_revision: Union[str, Sequence[str], None] = '002'
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+
+
+def _has_column(table: str, column: str) -> bool:
+    bind = op.get_bind()
+    insp = inspect(bind)
+    if table not in insp.get_table_names():
+        return True
+    columns = [c['name'] for c in insp.get_columns(table)]
+    return column in columns
+
+
+def upgrade() -> None:
+    # servers: server_type
+    if not _has_column('servers', 'server_type'):
+        op.add_column('servers', sa.Column(
+            'server_type', sa.String(20), nullable=False, server_default='wireguard'
+        ))
+
+    # servers: awg obfuscation params
+    for col in ['awg_jc', 'awg_jmin', 'awg_jmax', 'awg_s1', 'awg_s2',
+                'awg_h1', 'awg_h2', 'awg_h3', 'awg_h4']:
+        if not _has_column('servers', col):
+            op.add_column('servers', sa.Column(col, sa.Integer(), nullable=True))
+
+    # clients: peer_visibility
+    if not _has_column('clients', 'peer_visibility'):
+        op.add_column('clients', sa.Column(
+            'peer_visibility', sa.Boolean(), nullable=False, server_default='false'
+        ))
+
+
+def downgrade() -> None:
+    # Remove in reverse order
+    for col in ['awg_h4', 'awg_h3', 'awg_h2', 'awg_h1',
+                'awg_s2', 'awg_s1', 'awg_jmax', 'awg_jmin', 'awg_jc', 'server_type']:
+        op.drop_column('servers', col)
+    op.drop_column('clients', 'peer_visibility')
+
+========================================================================================
+FILE: versions/004_awg_mtu_peer_visibility_support.py
+========================================================================================
+"""awg_mtu and supports_peer_visibility on servers
+
+Revision ID: 004
+Revises: 003
+Create Date: 2026-03-14
+"""
+from typing import Sequence, Union
+
+from alembic import op
+from sqlalchemy import inspect
+import sqlalchemy as sa
+
+
+revision: str = '004'
+down_revision: Union[str, Sequence[str], None] = '003'
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+
+
+def _has_column(table: str, column: str) -> bool:
+    bind = op.get_bind()
+    insp = inspect(bind)
+    if table not in insp.get_table_names():
+        return True
+    columns = [c['name'] for c in insp.get_columns(table)]
+    return column in columns
+
+
+def upgrade() -> None:
+    # awg_mtu — nullable integer (None = use default: 1280 for AWG, 1420 for WG)
+    if not _has_column('servers', 'awg_mtu'):
+        op.add_column('servers', sa.Column('awg_mtu', sa.Integer(), nullable=True))
+
+    # supports_peer_visibility — boolean, default True
+    if not _has_column('servers', 'supports_peer_visibility'):
+        op.add_column('servers', sa.Column(
+            'supports_peer_visibility', sa.Boolean(), nullable=False, server_default='true'
+        ))
+
+
+def downgrade() -> None:
+    op.drop_column('servers', 'awg_mtu')
+    op.drop_column('servers', 'supports_peer_visibility')
+
+========================================================================================
+FILE: versions/005_awg_h_biginteger.py
+========================================================================================
+"""awg_h1-h4 columns: Integer → BigInteger (uint32 can exceed int32 range)
+
+Revision ID: 005
+Revises: 004
+Create Date: 2026-03-14
+"""
+from typing import Sequence, Union
+
+from alembic import op
+import sqlalchemy as sa
+
+
+revision: str = '005'
+down_revision: Union[str, Sequence[str], None] = '004'
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+
+
+def upgrade() -> None:
+    for col in ('awg_h1', 'awg_h2', 'awg_h3', 'awg_h4'):
+        op.alter_column(
+            'servers', col,
+            existing_type=sa.Integer(),
+            type_=sa.BigInteger(),
+            existing_nullable=True,
+        )
+
+
+def downgrade() -> None:
+    for col in ('awg_h1', 'awg_h2', 'awg_h3', 'awg_h4'):
+        op.alter_column(
+            'servers', col,
+            existing_type=sa.BigInteger(),
+            type_=sa.Integer(),
+            existing_nullable=True,
+        )
+
+========================================================================================
+FILE: versions/006_split_tunnel_support.py
+========================================================================================
+"""add split_tunnel_support to servers
+
+Revision ID: 006
+Revises: 005
+Create Date: 2026-03-14
+"""
+from alembic import op
+from sqlalchemy import inspect
+import sqlalchemy as sa
+
+revision: str = '006'
+down_revision = '005'
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    bind = op.get_bind()
+    insp = inspect(bind)
+    if 'servers' not in insp.get_table_names():
+        return
+
+    columns = {c['name'] for c in insp.get_columns('servers')}
+    if 'split_tunnel_support' in columns:
+        return
+
+    op.add_column('servers', sa.Column(
+        'split_tunnel_support', sa.Boolean(),
+        nullable=False, server_default='false'
+    ))
+
+
+def downgrade():
+    bind = op.get_bind()
+    insp = inspect(bind)
+    if 'servers' not in insp.get_table_names():
+        return
+
+    columns = {c['name'] for c in insp.get_columns('servers')}
+    if 'split_tunnel_support' not in columns:
+        return
+
+    op.drop_column('servers', 'split_tunnel_support')
+
+========================================================================================
+FILE: versions/007_encrypt_wireguard_keys.py
+========================================================================================
+"""encrypt wireguard private keys and preshared keys
+
+Revision ID: 007
+Revises: 006
+Create Date: 2026-03-14
+"""
+from alembic import op
+from sqlalchemy import text
+
+revision: str = '007'
+down_revision = '006'
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    """Re-encrypt any existing plain-text WireGuard keys in-place.
+
+    The EncryptedText TypeDecorator stores values as TEXT with an 'enc::' prefix.
+    Legacy plain-text values are read transparently; this migration writes them
+    back so all keys are encrypted at rest.
+    """
+    from src.database.encrypted_type import _fernet, _ENC_PREFIX
+
+    bind = op.get_bind()
+
+    # Encrypt Server.private_key
+    rows = bind.execute(text("SELECT id, private_key FROM servers")).fetchall()
+    for row in rows:
+        val = row[1]
+        if val and not val.startswith(_ENC_PREFIX):
+            encrypted = _ENC_PREFIX + _fernet.encrypt(val.encode("utf-8")).decode("ascii")
+            bind.execute(
+                text("UPDATE servers SET private_key = :val WHERE id = :id"),
+                {"val": encrypted, "id": row[0]},
+            )
+
+    # Encrypt Client.private_key and Client.preshared_key
+    rows = bind.execute(text("SELECT id, private_key, preshared_key FROM clients")).fetchall()
+    for row in rows:
+        client_id, priv, psk = row[0], row[1], row[2]
+        updates = {}
+        if priv and not priv.startswith(_ENC_PREFIX):
+            updates["private_key"] = _ENC_PREFIX + _fernet.encrypt(priv.encode("utf-8")).decode("ascii")
+        if psk and not psk.startswith(_ENC_PREFIX):
+            updates["preshared_key"] = _ENC_PREFIX + _fernet.encrypt(psk.encode("utf-8")).decode("ascii")
+        if updates:
+            set_clause = ", ".join(f"{k} = :{k}" for k in updates)
+            updates["id"] = client_id
+            bind.execute(
+                text(f"UPDATE clients SET {set_clause} WHERE id = :id"),
+                updates,
+            )
+
+
+def downgrade():
+    # Keys are still stored as TEXT — we cannot reverse encryption safely.
+    # Downgrade is a no-op; plain-text values remain readable via backward-compat logic.
+    pass
+
+========================================================================================
+FILE: versions/008_add_ssh_private_key.py
+========================================================================================
+"""add ssh_private_key column to servers
+
+Revision ID: 008
+Revises: 007
+Create Date: 2026-03-14
+"""
+from alembic import op
+from sqlalchemy import inspect
+import sqlalchemy as sa
+
+revision: str = '008'
+down_revision = '007'
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    """Add ssh_private_key column to servers table (encrypted TEXT, nullable)."""
+    bind = op.get_bind()
+    columns = [c['name'] for c in inspect(bind).get_columns('servers')]
+    if 'ssh_private_key' not in columns:
+        op.add_column('servers', sa.Column('ssh_private_key', sa.Text(), nullable=True))
+
+
+def downgrade():
+    op.drop_column('servers', 'ssh_private_key')
+
+========================================================================================
+FILE: versions/009_add_update_history.py
+========================================================================================
+"""add update_history table
+
+Revision ID: 009
+Revises: 008
+Create Date: 2026-03-14
+"""
+from alembic import op
+from sqlalchemy import inspect
+import sqlalchemy as sa
+
+revision: str = '009'
+down_revision = '008'
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    bind = op.get_bind()
+    tables = inspect(bind).get_table_names()
+    if 'update_history' not in tables:
+        op.create_table(
+            'update_history',
+            sa.Column('id',               sa.Integer,  primary_key=True, autoincrement=True),
+            sa.Column('from_version',     sa.String(32), nullable=False),
+            sa.Column('to_version',       sa.String(32), nullable=False),
+            sa.Column('update_type',      sa.String(16), nullable=True),
+            sa.Column('status',           sa.String(32), nullable=False, default='pending'),
+            sa.Column('started_at',       sa.DateTime(timezone=True), server_default=sa.func.now()),
+            sa.Column('completed_at',     sa.DateTime(timezone=True), nullable=True),
+            sa.Column('duration_seconds', sa.Float,    nullable=True),
+            sa.Column('started_by',       sa.String(128), nullable=False, default='admin'),
+            sa.Column('rollback_available', sa.Boolean, nullable=False, default=False),
+            sa.Column('backup_path',      sa.Text,     nullable=True),
+            sa.Column('is_rollback',      sa.Boolean,  nullable=False, default=False),
+            sa.Column('rollback_of_id',   sa.Integer,  sa.ForeignKey('update_history.id'), nullable=True),
+            sa.Column('error_message',    sa.Text,     nullable=True),
+            sa.Column('log',              sa.Text,     nullable=True),
+            sa.Column('manifest_json',    sa.Text,     nullable=True),
+        )
+        op.create_index('ix_uh_status_started', 'update_history', ['status', 'started_at'])
+
+
+def downgrade():
+    op.drop_index('ix_uh_status_started', 'update_history')
+    op.drop_table('update_history')
+
+========================================================================================
+FILE: versions/010_add_drift_detection.py
+========================================================================================
+"""add drift detection columns to servers
+
+Revision ID: 010
+Revises: 009
+Create Date: 2026-03-15
+"""
+from alembic import op
+from sqlalchemy import inspect
+import sqlalchemy as sa
+
+revision: str = '010'
+down_revision = '009'
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    bind = op.get_bind()
+    cols = {c['name'] for c in inspect(bind).get_columns('servers')}
+
+    if 'drift_detected' not in cols:
+        op.add_column('servers', sa.Column('drift_detected', sa.Boolean, nullable=False,
+                                           server_default='false'))
+    if 'drift_details' not in cols:
+        op.add_column('servers', sa.Column('drift_details', sa.Text, nullable=True))
+    if 'drift_detected_at' not in cols:
+        op.add_column('servers', sa.Column('drift_detected_at', sa.DateTime(timezone=True),
+                                           nullable=True))
+    if 'last_reconcile_at' not in cols:
+        op.add_column('servers', sa.Column('last_reconcile_at', sa.DateTime(timezone=True),
+                                           nullable=True))
+
+
+def downgrade():
+    op.drop_column('servers', 'last_reconcile_at')
+    op.drop_column('servers', 'drift_detected_at')
+    op.drop_column('servers', 'drift_details')
+    op.drop_column('servers', 'drift_detected')
+
+========================================================================================
+FILE: versions/011_subscription_plan_features.py
+========================================================================================
+"""add features column to subscription_plans
+
+Revision ID: 011
+Revises: 010
+Create Date: 2026-03-16
+"""
+from alembic import op
+from sqlalchemy import inspect
+import sqlalchemy as sa
+
+revision: str = '011'
+down_revision = '010'
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    bind = op.get_bind()
+    # Check if the table exists first (it's created by client_portal_main.py, may not exist yet)
+    tables = inspect(bind).get_table_names()
+    if 'subscription_plans' not in tables:
+        return  # Table will be created with the column by Base.metadata.create_all()
+    cols = {c['name'] for c in inspect(bind).get_columns('subscription_plans')}
+    if 'features' not in cols:
+        op.add_column('subscription_plans', sa.Column('features', sa.JSON, nullable=True))
+
+
+def downgrade():
+    op.drop_column('subscription_plans', 'features')
+
+========================================================================================
+FILE: versions/012_corp_vpn_unique_vpn_ip.py
+========================================================================================
+"""corporate VPN: unique (network_id, vpn_ip) + update default plan features
+
+Revision ID: 012
+Revises: 011
+Create Date: 2026-03-17
+
+Fixes:
+  - Add UNIQUE constraint on (network_id, vpn_ip) in corporate_network_sites
+    to prevent duplicate IPs from concurrent site-add requests.
+  - Update subscription_plans features JSON to include corp_networks / corp_sites
+    for plans that should have corporate VPN access (standard, premium, corp tiers).
+"""
+from alembic import op
+from sqlalchemy import inspect, text
+import sqlalchemy as sa
+
+revision: str = '012'
+down_revision = '011'
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    bind = op.get_bind()
+    tables = inspect(bind).get_table_names()
+
+    # 1. Add unique constraint on (network_id, vpn_ip)
+    if 'corporate_network_sites' in tables:
+        # Remove any existing duplicate vpn_ips (safety — should not exist)
+        # before adding constraint (dedup by keeping the site with lower id)
+        bind.execute(text("""
+            DELETE FROM corporate_network_sites
+            WHERE id NOT IN (
+                SELECT MIN(id)
+                FROM corporate_network_sites
+                GROUP BY network_id, vpn_ip
+            )
+        """))
+
+        # Check if constraint already exists
+        constraints = {c['name'] for c in inspect(bind).get_unique_constraints('corporate_network_sites')}
+        if 'uq_corp_site_vpn_ip' not in constraints:
+            op.create_unique_constraint(
+                'uq_corp_site_vpn_ip',
+                'corporate_network_sites',
+                ['network_id', 'vpn_ip'],
+            )
+
+    # 2. Update default plan features for corp VPN access
+    if 'subscription_plans' in tables:
+        cols = {c['name'] for c in inspect(bind).get_columns('subscription_plans')}
+        if 'features' in cols:
+            # Only update plans that currently have NULL features (don't overwrite admin customisations)
+            _plan_features = {
+                # tier (lowercase)  : features JSON
+                'standard':  '{"corp_networks": 1, "corp_sites": 5}',
+                'pro':        '{"corp_networks": 3, "corp_sites": 20}',
+                'premium':    '{"corp_networks": 3, "corp_sites": 20}',
+                'business':   '{"corp_networks": 3, "corp_sites": 20}',
+                'enterprise': '{"corp_networks": 10, "corp_sites": 100}',
+                'corporation': '{"corp_networks": 5, "corp_sites": 30}',
+                'corporate':  '{"corp_networks": 5, "corp_sites": 30}',
+            }
+            for tier, features_json in _plan_features.items():
+                bind.execute(text("""
+                    UPDATE subscription_plans
+                    SET features = :features
+                    WHERE LOWER(tier::text) = :tier AND (features IS NULL OR features::text = 'null')
+                """), {'tier': tier, 'features': features_json})
+
+
+def downgrade():
+    bind = op.get_bind()
+    tables = inspect(bind).get_table_names()
+    if 'corporate_network_sites' in tables:
+        op.drop_constraint('uq_corp_site_vpn_ip', 'corporate_network_sites', type_='unique')
+
+========================================================================================
+FILE: versions/013_proxy_protocols.py
+========================================================================================
+"""Add proxy protocol support: server_category, Hysteria2, TUIC fields
+
+Revision ID: 013
+Revises: 012
+Create Date: 2026-03-24
+
+Changes:
+  servers:
+    - server_category  VARCHAR(20) NOT NULL DEFAULT 'vpn'
+    - proxy_domain     VARCHAR(255) nullable
+    - proxy_tls_mode   VARCHAR(20)  nullable  (self_signed | acme | manual)
+    - proxy_cert_path  VARCHAR(255) nullable
+    - proxy_key_path   VARCHAR(255) nullable
+    - proxy_config_path VARCHAR(255) nullable
+    - proxy_service_name VARCHAR(100) nullable
+    - proxy_obfs_password VARCHAR(255) nullable  (Hysteria2 OBFS)
+  clients:
+    - proxy_password  TEXT nullable (encrypted at ORM layer)
+    - proxy_uuid      VARCHAR(36) nullable (TUIC UUID auth)
+    - ip_index → nullable (proxy clients have no VPN IP)
+    - ipv4     → nullable (proxy clients have no VPN IP)
+"""
+from alembic import op
+import sqlalchemy as sa
+from sqlalchemy import inspect, text
+
+
+revision = '013'
+down_revision = '012'
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    conn = op.get_bind()
+    inspector = inspect(conn)
+
+    # ── servers table ─────────────────────────────────────────────────────────
+
+    existing_server_cols = {c['name'] for c in inspector.get_columns('servers')}
+
+    if 'server_category' not in existing_server_cols:
+        op.add_column('servers', sa.Column(
+            'server_category', sa.String(20), nullable=False, server_default='vpn'
+        ))
+        # Back-fill from server_type
+        conn.execute(text(
+            "UPDATE servers SET server_category = 'vpn' "
+            "WHERE server_type IN ('wireguard', 'amneziawg')"
+        ))
+
+    for col_name, col_def in [
+        ('proxy_domain',         sa.String(255)),
+        ('proxy_tls_mode',       sa.String(20)),
+        ('proxy_cert_path',      sa.String(255)),
+        ('proxy_key_path',       sa.String(255)),
+        ('proxy_config_path',    sa.String(255)),
+        ('proxy_service_name',   sa.String(100)),
+        ('proxy_obfs_password',  sa.String(255)),
+    ]:
+        if col_name not in existing_server_cols:
+            op.add_column('servers', sa.Column(col_name, col_def, nullable=True))
+
+    # ── clients table ─────────────────────────────────────────────────────────
+
+    existing_client_cols = {c['name'] for c in inspector.get_columns('clients')}
+
+    if 'proxy_password' not in existing_client_cols:
+        op.add_column('clients', sa.Column('proxy_password', sa.Text(), nullable=True))
+
+    if 'proxy_uuid' not in existing_client_cols:
+        op.add_column('clients', sa.Column('proxy_uuid', sa.String(36), nullable=True))
+
+    # Make ip_index nullable so proxy clients (no VPN IP) can exist
+    op.alter_column('clients', 'ip_index',
+                    existing_type=sa.Integer(),
+                    nullable=True)
+
+    # Make ipv4 nullable for the same reason
+    op.alter_column('clients', 'ipv4',
+                    existing_type=sa.String(20),
+                    nullable=True)
+
+
+def downgrade():
+    # Restore NOT NULL (only safe if no proxy clients exist)
+    op.alter_column('clients', 'ipv4',
+                    existing_type=sa.String(20),
+                    nullable=False)
+    op.alter_column('clients', 'ip_index',
+                    existing_type=sa.Integer(),
+                    nullable=False)
+
+    for col in ('proxy_uuid', 'proxy_password'):
+        op.drop_column('clients', col)
+
+    for col in ('proxy_obfs_password', 'proxy_service_name', 'proxy_config_path',
+                'proxy_key_path', 'proxy_cert_path', 'proxy_tls_mode',
+                'proxy_domain', 'server_category'):
+        op.drop_column('servers', col)
+
+========================================================================================
+FILE: versions/014_proxy_client_nullable_pubkey.py
+========================================================================================
+"""Make Client.public_key nullable (proxy clients have no WG key)
+
+Revision ID: 014
+Revises: 013
+Create Date: 2026-03-24
+
+Proxy clients (Hysteria2, TUIC) do not have WireGuard public keys.
+Previously a synthetic hex placeholder was stored to satisfy the NOT NULL
+constraint.  This migration:
+  1. Drops the NOT NULL constraint on clients.public_key
+  2. Nullifies any existing proxy placeholder keys (identified by their
+     server_category = 'proxy' join) so the DB reflects reality
+"""
+
+from alembic import op
+import sqlalchemy as sa
+from sqlalchemy import text, inspect
+
+revision = '014'
+down_revision = '013'
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    bind = op.get_bind()
+
+    # Only alter if the column is currently NOT NULL
+    inspector = inspect(bind)
+    cols = {c["name"]: c for c in inspector.get_columns("clients")}
+    pub_col = cols.get("public_key", {})
+
+    if pub_col.get("nullable") is False:
+        # Drop NOT NULL; keep the UNIQUE index intact
+        op.alter_column("clients", "public_key", nullable=True,
+                        existing_type=sa.String(44))
+
+    # Null out synthetic proxy placeholder keys:
+    # proxy clients joined via servers where server_category = 'proxy'.
+    # The placeholder keys are hex strings that are exactly 44 chars and do NOT
+    # look like valid base64 WireGuard keys (WG keys use base64 charset).
+    # Safest: null all client keys whose server is a proxy server.
+    bind.execute(text("""
+        UPDATE clients c
+           SET public_key = NULL
+          FROM servers s
+         WHERE c.server_id = s.id
+           AND s.server_category = 'proxy'
+           AND c.public_key IS NOT NULL
+    """))
+
+
+def downgrade():
+    # Restore NOT NULL — requires that all rows have a non-null value.
+    # Proxy clients will get a synthetic key back.
+    bind = op.get_bind()
+    import secrets
+    # Re-fill NULL public_keys with unique hex placeholders
+    rows = bind.execute(text("SELECT id FROM clients WHERE public_key IS NULL")).fetchall()
+    for row in rows:
+        placeholder = secrets.token_hex(22)
+        bind.execute(
+            text("UPDATE clients SET public_key = :k WHERE id = :id"),
+            {"k": placeholder, "id": row[0]}
+        )
+    op.alter_column("clients", "public_key", nullable=False,
+                    existing_type=sa.String(44))
+
+========================================================================================
+FILE: versions/015_proxy_auth_password.py
+========================================================================================
+"""add proxy_auth_password to servers
+
+Revision ID: 015
+Revises: 014
+Create Date: 2026-03-24
+
+Hysteria2 uses 'password' auth type (not 'userpass') for sing-box/Hiddify
+compatibility. The server-level auth password is shared by all clients.
+"""
+from alembic import op
+import sqlalchemy as sa
+
+revision = '015'
+down_revision = '014'
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    # Use raw SQL with IF NOT EXISTS — column may already exist if added manually
+    op.execute(
+        "ALTER TABLE servers ADD COLUMN IF NOT EXISTS proxy_auth_password VARCHAR(255)"
+    )
+
+
+def downgrade():
+    op.drop_column('servers', 'proxy_auth_password')
+
+========================================================================================
+FILE: versions/016_payment_tracing_and_lifecycle.py
+========================================================================================
+"""Add payment pipeline tracing fields
+
+Revision ID: 016
+Revises: 015_proxy_auth_password
+Create Date: 2026-03-26
+
+Adds to client_portal_payments:
+  - trace_id        VARCHAR(64)  — human-readable pipeline trace identifier
+  - pipeline_log    TEXT         — JSON array of pipeline step records
+  - pipeline_status VARCHAR(20)  — "ok" | "inconsistent"
+"""
+from alembic import op
+from sqlalchemy import inspect
+import sqlalchemy as sa
+
+revision = "016"
+down_revision = "015"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    bind = op.get_bind()
+    insp = inspect(bind)
+    if "client_portal_payments" not in insp.get_table_names():
+        return
+
+    columns = {c["name"] for c in insp.get_columns("client_portal_payments")}
+    indexes = {idx["name"] for idx in insp.get_indexes("client_portal_payments")}
+
+    with op.batch_alter_table("client_portal_payments", schema=None) as batch_op:
+        if "trace_id" not in columns:
+            batch_op.add_column(
+                sa.Column("trace_id", sa.String(64), nullable=True)
+            )
+        if "pipeline_log" not in columns:
+            batch_op.add_column(
+                sa.Column("pipeline_log", sa.Text(), nullable=True)
+            )
+        if "pipeline_status" not in columns:
+            batch_op.add_column(
+                sa.Column("pipeline_status", sa.String(20), nullable=True, server_default="ok")
+            )
+        if "ix_cpp_trace_id" not in indexes:
+            batch_op.create_index("ix_cpp_trace_id", ["trace_id"])
+
+
+def downgrade():
+    bind = op.get_bind()
+    insp = inspect(bind)
+    if "client_portal_payments" not in insp.get_table_names():
+        return
+
+    columns = {c["name"] for c in insp.get_columns("client_portal_payments")}
+    indexes = {idx["name"] for idx in insp.get_indexes("client_portal_payments")}
+
+    with op.batch_alter_table("client_portal_payments", schema=None) as batch_op:
+        if "ix_cpp_trace_id" in indexes:
+            batch_op.drop_index("ix_cpp_trace_id")
+        if "pipeline_status" in columns:
+            batch_op.drop_column("pipeline_status")
+        if "pipeline_log" in columns:
+            batch_op.drop_column("pipeline_log")
+        if "trace_id" in columns:
+            batch_op.drop_column("trace_id")
+
+========================================================================================
+FILE: versions/017_server_bootstrap_logs.py
+========================================================================================
+"""Add server_bootstrap_logs table for persistent bootstrap task tracking
+
+Revision ID: 017
+Revises: 016
+Create Date: 2026-03-26
+
+Adds server_bootstrap_logs table:
+  - task_id    VARCHAR(64)  — unique bootstrap task identifier (UUID from frontend)
+  - server_id  INT FK       — associated server (nullable, SET NULL on delete)
+  - status     VARCHAR(16)  — running / complete / failed / interrupted
+  - logs       TEXT         — newline-joined log lines
+  - error      TEXT         — error message if status=failed
+  - created_at TIMESTAMPTZ
+  - completed_at TIMESTAMPTZ
+"""
+from alembic import op
+import sqlalchemy as sa
+
+revision = "017"
+down_revision = "016"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    op.create_table(
+        "server_bootstrap_logs",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("task_id", sa.String(64), nullable=False),
+        sa.Column("server_id", sa.Integer(), sa.ForeignKey("servers.id", ondelete="SET NULL"), nullable=True),
+        sa.Column("status", sa.String(16), nullable=False, server_default="running"),
+        sa.Column("logs", sa.Text(), nullable=True),
+        sa.Column("error", sa.Text(), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("task_id"),
+    )
+    op.create_index("ix_sbl_task_id", "server_bootstrap_logs", ["task_id"])
+    op.create_index("ix_sbl_server_id", "server_bootstrap_logs", ["server_id"])
+
+
+def downgrade():
+    op.drop_index("ix_sbl_server_id", table_name="server_bootstrap_logs")
+    op.drop_index("ix_sbl_task_id", table_name="server_bootstrap_logs")
+    op.drop_table("server_bootstrap_logs")
+
+========================================================================================
+FILE: versions/018_add_server_lifecycle_and_is_active.py
+========================================================================================
+"""Add additive server lifecycle_status and is_active fields
+
+Revision ID: 018
+Revises: 017
+Create Date: 2026-03-27
+"""
+from alembic import op
+import sqlalchemy as sa
+
+revision = "018"
+down_revision = "017"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    op.add_column(
+        "servers",
+        sa.Column("lifecycle_status", sa.String(length=32), nullable=False, server_default="online"),
+    )
+    op.add_column(
+        "servers",
+        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+    )
+
+    op.execute(
+        """
+        UPDATE servers
+        SET lifecycle_status = CASE status
+            WHEN 'ONLINE' THEN 'online'
+            WHEN 'OFFLINE' THEN 'offline'
+            WHEN 'MAINTENANCE' THEN 'degraded'
+            WHEN 'ERROR' THEN 'failed'
+            ELSE 'offline'
+        END
+        """
+    )
+
+
+def downgrade():
+    op.drop_column("servers", "is_active")
+    op.drop_column("servers", "lifecycle_status")
+
+========================================================================================
+FILE: versions/019_stage1_update_hardening.py
+========================================================================================
+"""stage1 update hardening
+
+Revision ID: 019_stage1_update_hardening
+Revises: 018
+Create Date: 2026-03-27
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+
+# revision identifiers, used by Alembic.
+revision = "019_stage1_update_hardening"
+down_revision = "018"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.add_column("update_history", sa.Column("channel", sa.String(length=16), nullable=True))
+    op.add_column("update_history", sa.Column("progress_heartbeat_at", sa.DateTime(timezone=True), nullable=True))
+    op.add_column("update_history", sa.Column("staging_path", sa.Text(), nullable=True))
+    op.add_column("update_history", sa.Column("package_path", sa.Text(), nullable=True))
+    op.add_column("update_history", sa.Column("previous_release_path", sa.Text(), nullable=True))
+    op.add_column("update_history", sa.Column("db_backup_path", sa.Text(), nullable=True))
+    op.add_column("update_history", sa.Column("db_backup_sha256", sa.String(length=64), nullable=True))
+    op.add_column("update_history", sa.Column("db_backup_size", sa.BigInteger(), nullable=True))
+    op.add_column("update_history", sa.Column("db_backup_valid", sa.Boolean(), nullable=True))
+    op.add_column("update_history", sa.Column("last_step", sa.String(length=64), nullable=True))
+    op.add_column("update_history", sa.Column("manifest_sha256", sa.String(length=64), nullable=True))
+    op.add_column("update_history", sa.Column("package_sha256", sa.String(length=64), nullable=True))
+    op.add_column("update_history", sa.Column("package_size", sa.BigInteger(), nullable=True))
+    op.add_column("update_history", sa.Column("requires_migration", sa.Boolean(), nullable=True))
+    op.add_column("update_history", sa.Column("requires_restart", sa.Boolean(), nullable=True))
+
+
+def downgrade() -> None:
+    op.drop_column("update_history", "requires_restart")
+    op.drop_column("update_history", "requires_migration")
+    op.drop_column("update_history", "package_size")
+    op.drop_column("update_history", "package_sha256")
+    op.drop_column("update_history", "manifest_sha256")
+    op.drop_column("update_history", "last_step")
+    op.drop_column("update_history", "db_backup_valid")
+    op.drop_column("update_history", "db_backup_size")
+    op.drop_column("update_history", "db_backup_sha256")
+    op.drop_column("update_history", "db_backup_path")
+    op.drop_column("update_history", "previous_release_path")
+    op.drop_column("update_history", "package_path")
+    op.drop_column("update_history", "staging_path")
+    op.drop_column("update_history", "progress_heartbeat_at")
+    op.drop_column("update_history", "channel")
+
+========================================================================================
+FILE: versions/020_expand_update_status_enum.py
+========================================================================================
+"""expand update status enum for stage1 lifecycle
+
+Revision ID: 020_expand_update_status_enum
+Revises: 019_stage1_update_hardening
+Create Date: 2026-03-27
+"""
+
+from alembic import op
+
+
+revision = "020_expand_update_status_enum"
+down_revision = "019_stage1_update_hardening"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.execute("ALTER TYPE updatestatus ADD VALUE IF NOT EXISTS 'DOWNLOADED'")
+    op.execute("ALTER TYPE updatestatus ADD VALUE IF NOT EXISTS 'VERIFIED'")
+    op.execute("ALTER TYPE updatestatus ADD VALUE IF NOT EXISTS 'READY_TO_APPLY'")
+    op.execute("ALTER TYPE updatestatus ADD VALUE IF NOT EXISTS 'ROLLBACK_REQUIRED'")
+
+
+def downgrade() -> None:
+    # PostgreSQL enums cannot safely drop values in-place.
+    pass
+
+========================================================================================
+FILE: versions/021_admin_user_permissions.py
+========================================================================================
+"""add permissions column to admin_users
+
+Revision ID: 021_admin_user_permissions
+Revises: 020_expand_update_status_enum
+Create Date: 2026-04-04
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+revision = '021_admin_user_permissions'
+down_revision = '020_expand_update_status_enum'
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    op.add_column('admin_users', sa.Column('permissions', sa.Text(), nullable=True))
+    # Default: NULL means no restrictions (admin level) / empty list means no permissions (manager)
+    # Also ensure is_active column exists (may be missing on older installs)
+    try:
+        op.add_column('admin_users', sa.Column('is_active', sa.Boolean(), nullable=False, server_default='true'))
+    except Exception:
+        pass  # column may already exist
+
+
+def downgrade():
+    op.drop_column('admin_users', 'permissions')
+
+========================================================================================
+FILE: versions/022_add_server_status_change_audit_action.py
+========================================================================================
+"""add SERVER_STATUS_CHANGE and missing uppercase audit action enum values
+
+Revision ID: 022_fix_audit_action_enum
+Revises: 021_admin_user_permissions
+Create Date: 2026-04-05
+
+Note: SQLAlchemy Enum(AuditAction) stores enum member NAMES (uppercase),
+not values. The original enum was created with uppercase names.
+Later migrations (002) added lowercase values (backup_create) which
+would fail if those actions are ever used. This migration adds the
+correct uppercase variants for all enum members that were missing.
+"""
+
+from alembic import op
+
+revision = '022_fix_audit_action_enum'
+down_revision = '021_admin_user_permissions'
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    # Add uppercase name variants (what SQLAlchemy actually stores)
+    for value in ('SERVER_STATUS_CHANGE', 'BACKUP_CREATE', 'BACKUP_RESTORE', 'BACKUP_DELETE'):
+        op.execute(f"ALTER TYPE auditaction ADD VALUE IF NOT EXISTS '{value}'")
+
+
+def downgrade():
+    # PostgreSQL does not support removing enum values
+    pass
+
+========================================================================================
+FILE: versions/023_backfill_corp_sites_features.py
+========================================================================================
+"""backfill corp_sites in subscription plan features
+
+Revision ID: 023_backfill_corp_sites_features
+Revises: 022_fix_audit_action_enum
+Create Date: 2026-04-05
+
+Fixes:
+  - Existing plans could contain {"corp_networks": N} without "corp_sites".
+  - Corporate VPN backend then fell back to a generic site cap, which made
+    enterprise/corporate plans behave incorrectly.
+"""
+
+from alembic import op
+from sqlalchemy import inspect, text
+
+revision = "023_backfill_corp_sites_features"
+down_revision = "022_fix_audit_action_enum"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    bind = op.get_bind()
+    tables = inspect(bind).get_table_names()
+    if "subscription_plans" not in tables:
+        return
+
+    defaults = {
+        "standard": '{"corp_sites": 5}',
+        "pro": '{"corp_sites": 20}',
+        "premium": '{"corp_sites": 20}',
+        "business": '{"corp_sites": 20}',
+        "enterprise": '{"corp_sites": 100}',
+        "corporation": '{"corp_sites": 30}',
+        "corporate": '{"corp_sites": 30}',
+    }
+
+    for tier, patch in defaults.items():
+        bind.execute(
+            text(
+                """
+                UPDATE subscription_plans
+                SET features = (features::jsonb || CAST(:patch AS jsonb))
+                WHERE LOWER(tier::text) = :tier
+                  AND features IS NOT NULL
+                  AND (features::jsonb ? 'corp_networks')
+                  AND NOT (features::jsonb ? 'corp_sites')
+                """
+            ),
+            {"tier": tier, "patch": patch},
+        )
+
+
+def downgrade():
+    bind = op.get_bind()
+    tables = inspect(bind).get_table_names()
+    if "subscription_plans" not in tables:
+        return
+
+    bind.execute(
+        text(
+            """
+            UPDATE subscription_plans
+            SET features = (features::jsonb - 'corp_sites')
+            WHERE features IS NOT NULL
+              AND (features::jsonb ? 'corp_sites')
+            """
+        )
+    )
+
+========================================================================================
+FILE: versions/024_add_server_display_name.py
+========================================================================================
+"""Add display_name to servers for client portal display
+
+Revision ID: 024_add_server_display_name
+Revises: 023_backfill_corp_sites_features
+Create Date: 2026-04-07
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+revision = "024_add_server_display_name"
+down_revision = "023_backfill_corp_sites_features"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    op.add_column(
+        "servers",
+        sa.Column("display_name", sa.String(length=100), nullable=True),
+    )
+
+
+def downgrade():
+    op.drop_column("servers", "display_name")
+
+========================================================================================
+FILE: versions/025_amneziawg_config_path_migration.py
+========================================================================================
+"""Migrate AmneziaWG config_path to /etc/amnezia/amneziawg/
+
+Versions before 1.4.68 wrote the AmneziaWG config to /etc/amneziawg/<iface>.conf,
+but awg-quick from ppa:amnezia/ppa actually looks at /etc/amnezia/amneziawg/<iface>.conf
+(note the extra "amnezia/" segment). Existing rows with the old path can't be
+started without manual fixup; this migration rewrites them in place.
+
+Only touches rows under the legacy directory; rows pointing at custom paths
+(e.g. Docker-mounted volumes like /opt/amneziawg/config/awg0.conf) are left
+untouched.
+
+Revision ID: 025_awg_config_path
+Revises: 024_add_server_display_name
+Create Date: 2026-04-29
+"""
+
+from alembic import op
+
+
+revision = "025_awg_config_path"
+down_revision = "024_add_server_display_name"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    op.execute(
+        """
+        UPDATE servers
+           SET config_path = REPLACE(config_path, '/etc/amneziawg/', '/etc/amnezia/amneziawg/')
+         WHERE server_type = 'amneziawg'
+           AND config_path LIKE '/etc/amneziawg/%'
+        """
+    )
+
+
+def downgrade():
+    op.execute(
+        """
+        UPDATE servers
+           SET config_path = REPLACE(config_path, '/etc/amnezia/amneziawg/', '/etc/amneziawg/')
+         WHERE server_type = 'amneziawg'
+           AND config_path LIKE '/etc/amnezia/amneziawg/%'
+        """
+    )
+
+========================================================================================
+FILE: versions/026_add_server_ipv4_only.py
+========================================================================================
+"""Add ipv4_only flag to servers — strip IPv6 from generated client configs
+
+Revision ID: 026_add_ipv4_only
+Revises: 025_awg_config_path
+Create Date: 2026-05-01
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+revision = "026_add_ipv4_only"
+down_revision = "025_awg_config_path"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    op.add_column(
+        "servers",
+        sa.Column(
+            "ipv4_only",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.text("false"),
+        ),
+    )
+
+
+def downgrade():
+    op.drop_column("servers", "ipv4_only")
+
+========================================================================================
+FILE: versions/027_add_agent_service_name.py
+========================================================================================
+"""Add agent_service_name to servers — supports per-interface multi-agent installs
+
+Revision ID: 027_add_agent_service_name
+Revises: 026_add_ipv4_only
+Create Date: 2026-05-02
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+revision = "027_add_agent_service_name"
+down_revision = "026_add_ipv4_only"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    # NULL = legacy single-instance install (vpnmanager-agent.service).
+    # Existing rows stay NULL — uninstall code uses that as a sentinel and
+    # falls back to the legacy unit name. New installs get filled in by
+    # server_manager.install_agent after a successful bootstrap.
+    op.add_column(
+        "servers",
+        sa.Column(
+            "agent_service_name",
+            sa.String(length=64),
+            nullable=True,
+        ),
+    )
+
+
+def downgrade():
+    op.drop_column("servers", "agent_service_name")
+
+========================================================================================
+FILE: versions/028_add_updates_auto_apply.py
+========================================================================================
+"""Add updates_auto_apply system config — controls whether the panel
+automatically applies updates from its configured channel.
+
+Default behaviour is split:
+  - Fresh install (empty client/server tables) → 'true'   (opt-out)
+  - Upgrade from previous version (has data)   → 'false'  (opt-in)
+
+The split is so existing customers don't get surprised by the panel
+self-updating right after they upgrade to this release. New customers
+who never saw the toggle get the modern auto-update default.
+
+Revision ID: 028_updates_auto_apply
+Revises: 027_add_agent_service_name
+Create Date: 2026-05-02
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+revision = "028_updates_auto_apply"
+down_revision = "027_add_agent_service_name"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    conn = op.get_bind()
+    # Heuristic: if there's already operator data on this box, treat as
+    # an upgrade (default OFF). Otherwise this is a fresh install (default ON).
+    has_data = conn.execute(sa.text(
+        "SELECT EXISTS(SELECT 1 FROM clients) "
+        "OR EXISTS(SELECT 1 FROM servers WHERE id > 1)"
+    )).scalar()
+    default_value = 'false' if has_data else 'true'
+    conn.execute(
+        sa.text(
+            "INSERT INTO system_config (key, value, value_type, description) "
+            "VALUES ('updates_auto_apply', :v, 'bool', "
+            "'Auto-apply updates from the configured channel') "
+            "ON CONFLICT (key) DO NOTHING"
+        ),
+        {'v': default_value},
+    )
+
+
+def downgrade():
+    op.get_bind().execute(sa.text(
+        "DELETE FROM system_config WHERE key = 'updates_auto_apply'"
+    ))
+
+========================================================================================
+FILE: versions/029_backfill_subscription_traffic.py
+========================================================================================
+"""Backfill NULL traffic counters on client_portal_subscriptions.
+
+Older code paths created subscription rows via raw SQL or migration steps
+that didn't set the BigInteger defaults, leaving `traffic_used_rx` /
+`traffic_used_tx` as NULL. The python property `traffic_used_total_gb`
+then crashed with `TypeError: unsupported operand type(s) for +:
+'NoneType' and 'NoneType'`, which surfaced as a 500 on
+`GET /api/v1/portal-users/{id}` and a "Server error, please try again"
+toast in the panel's user-details modal.
+
+The python property has been made None-safe in the same release, but
+backfilling NULL → 0 here matches the column intent and prevents the
+same crash from sneaking back in via any other code path that does
+straight arithmetic on these columns.
+
+Revision ID: 029_subs_traffic_zero
+Revises: 028_updates_auto_apply
+Create Date: 2026-05-02
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+revision = "029_subs_traffic_zero"
+down_revision = "028_updates_auto_apply"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    conn = op.get_bind()
+    conn.execute(sa.text(
+        "UPDATE client_portal_subscriptions "
+        "SET traffic_used_rx = 0 WHERE traffic_used_rx IS NULL"
+    ))
+    conn.execute(sa.text(
+        "UPDATE client_portal_subscriptions "
+        "SET traffic_used_tx = 0 WHERE traffic_used_tx IS NULL"
+    ))
+
+
+def downgrade():
+    # No reverse — we wouldn't want to introduce NULLs back.
+    pass
+
+========================================================================================
+FILE: versions/030_client_share_tokens.py
+========================================================================================
+"""client_share_tokens — time-limited public download links
+
+Revision ID: 030_share_tokens
+Revises: 029_subs_traffic_zero
+Create Date: 2026-05-06
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+revision = "030_share_tokens"
+down_revision = "029_subs_traffic_zero"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    # Idempotent — skip create if the table already exists. Defends against
+    # the case where a previous attempt of this same migration partially
+    # ran but didn't update alembic_version (e.g. crash between
+    # CREATE TABLE and the alembic_version UPDATE). Without this, the
+    # second run blasts straight into a "relation already exists" error
+    # and the whole migration aborts inside the lifespan handler — the
+    # smoke check then sees current=029 head=030 and triggers a rollback.
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing_tables = set(inspector.get_table_names())
+
+    if "client_share_tokens" not in existing_tables:
+        op.create_table(
+            "client_share_tokens",
+            sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
+            sa.Column("token", sa.String(64), nullable=False, unique=True),
+            sa.Column("client_id", sa.Integer(), nullable=False),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
+            sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+            sa.Column("used_at", sa.DateTime(timezone=True), nullable=True),
+            sa.Column("download_ip", sa.String(64), nullable=True),
+        )
+
+    existing_indexes = {
+        ix["name"] for ix in inspector.get_indexes("client_share_tokens")
+    } if "client_share_tokens" in inspector.get_table_names() else set()
+
+    if "ix_client_share_tokens_token" not in existing_indexes:
+        op.create_index(
+            "ix_client_share_tokens_token",
+            "client_share_tokens",
+            ["token"],
+            unique=True,
+        )
+    if "ix_client_share_tokens_client_id" not in existing_indexes:
+        op.create_index(
+            "ix_client_share_tokens_client_id",
+            "client_share_tokens",
+            ["client_id"],
+        )
+
+
+def downgrade():
+    op.drop_index("ix_client_share_tokens_client_id", table_name="client_share_tokens")
+    op.drop_index("ix_client_share_tokens_token", table_name="client_share_tokens")
+    op.drop_table("client_share_tokens")
+
+========================================================================================
+FILE: versions/031_device_limit_events.py
+========================================================================================
+"""device_limit_events — audit trail for device-limit decisions
+
+Revision ID: 031_device_events
+Revises: 030_share_tokens
+Create Date: 2026-05-10
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = "031_device_events"
+down_revision = "030_share_tokens"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    if "device_limit_events" in insp.get_table_names():
+        # Idempotent — earlier partial run created the table but didn't
+        # update alembic_version. Don't blow up.
+        return
+    op.create_table(
+        "device_limit_events",
+        sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
+        sa.Column("user_id", sa.Integer(), nullable=False, index=True),
+        sa.Column("client_id", sa.Integer(), nullable=True),
+        sa.Column("event_type", sa.String(32), nullable=False),
+        sa.Column("reason", sa.String(64), nullable=True),
+        sa.Column("max_devices", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("used_devices", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+            index=True,
+        ),
+    )
+
+
+def downgrade():
+    op.drop_table("device_limit_events")
+
+========================================================================================
+FILE: versions/032_peer_endpoint_log.py
+========================================================================================
+"""peer_endpoint_log — endpoint observations for advisory key-sharing detection
+
+Revision ID: 032_peer_endpoints
+Revises: 031_device_events
+Create Date: 2026-05-10
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = "032_peer_endpoints"
+down_revision = "031_device_events"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    if "peer_endpoint_log" in insp.get_table_names():
+        return  # idempotent
+    op.create_table(
+        "peer_endpoint_log",
+        sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
+        sa.Column("client_id", sa.Integer(), nullable=False, index=True),
+        sa.Column("server_id", sa.Integer(), nullable=False),
+        sa.Column("endpoint_ip", sa.String(64), nullable=False),
+        sa.Column(
+            "observed_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+            index=True,
+        ),
+    )
+    # Composite index for the "distinct endpoints in last N hours" query
+    op.create_index(
+        "ix_peer_endpoint_log_client_observed",
+        "peer_endpoint_log",
+        ["client_id", "observed_at"],
+    )
+
+
+def downgrade():
+    op.drop_index("ix_peer_endpoint_log_client_observed", table_name="peer_endpoint_log")
+    op.drop_table("peer_endpoint_log")
+
+========================================================================================
+FILE: versions/033_client_customer_email.py
+========================================================================================
+"""client.customer_email — admin-side per-customer device grouping
+
+Revision ID: 033_customer_email
+Revises: 032_peer_endpoints
+Create Date: 2026-05-10
+
+Operators that don't use the client portal still need a way to enforce
+"this customer can have at most N devices". The portal's max_devices lives
+on ClientPortalSubscription; admin-only flows have no such anchor — the
+admin just adds peers in a flat list. Adding a free-text customer_email
+to clients gives the admin a way to tag peers as belonging to the same
+real-world customer; enforcement counts existing peers with the same
+non-null customer_email when creating a new one.
+
+Indexed because the enforcement query runs on every POST /clients.
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = "033_customer_email"
+down_revision = "032_peer_endpoints"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    cols = {c["name"] for c in insp.get_columns("clients")}
+    if "customer_email" not in cols:
+        op.add_column(
+            "clients",
+            sa.Column("customer_email", sa.String(255), nullable=True),
+        )
+    # Idempotent index — skip if already created (rerun-safe).
+    existing_indexes = {ix["name"] for ix in insp.get_indexes("clients")}
+    if "ix_clients_customer_email" not in existing_indexes:
+        op.create_index(
+            "ix_clients_customer_email",
+            "clients",
+            ["customer_email"],
+        )
+
+
+def downgrade():
+    op.drop_index("ix_clients_customer_email", table_name="clients")
+    op.drop_column("clients", "customer_email")
+
+========================================================================================
+FILE: versions/034_paymentmethod_card_providers.py
+========================================================================================
+"""paymentmethod ENUM: add card-provider values
+
+Revision ID: 034_pm_card
+Revises: 033_customer_email
+Create Date: 2026-05-18
+
+`client_portal_payments.payment_method` is a Postgres ENUM that was created
+with only crypto + paypal + usd + eur values. The create-invoice handler
+writes the raw `provider` string for hosted-checkout providers (stripe,
+mollie, razorpay, payme), which Postgres rejects at commit time with
+`invalid input value for enum paymentmethod: "stripe"` — every Stripe
+checkout 500s the portal. Add the missing enum values so the existing
+write path succeeds.
+
+`ALTER TYPE ... ADD VALUE` cannot run inside a transaction in older Postgres
+versions, so we autocommit each statement. Newer (12+) Postgres supports it
+in transactions, but the `IF NOT EXISTS` guard makes the migration safe to
+re-run regardless.
+"""
+
+from alembic import op
+
+
+revision = "034_pm_card"
+down_revision = "033_customer_email"
+branch_labels = None
+depends_on = None
+
+
+NEW_VALUES = [
+    "stripe",
+    "mollie",
+    "razorpay",
+    "payme",
+    "cryptopay",
+    "nowpayments",
+]
+
+
+def upgrade():
+    bind = op.get_bind()
+    # Skip silently on non-postgres backends (SQLite has no enum types — it
+    # stores the string directly, so nothing to migrate).
+    if bind.dialect.name != "postgresql":
+        return
+    # Postgres 12+ allows `ALTER TYPE ... ADD VALUE` inside a transaction
+    # as long as the new value isn't used within that same transaction —
+    # which is the case here, we only add values, no INSERT references
+    # them. Earlier attempts in this migration tried to switch to AUTOCOMMIT
+    # via `bind.execution_options(...)` but that returns a new Connection
+    # wrapper without actually closing alembic's outer transaction, leaving
+    # the migration in a half-committed state where alembic_version never
+    # got bumped — health check then saw current≠head and auto-rolled back.
+    for v in NEW_VALUES:
+        op.execute(f"ALTER TYPE paymentmethod ADD VALUE IF NOT EXISTS '{v}'")
+
+
+def downgrade():
+    # Postgres has no `ALTER TYPE ... DROP VALUE`. Recreating the type
+    # requires copying every row, which is unsafe on a live install for
+    # what is effectively a metadata addition. Downgrade is a no-op.
+    pass
+
+========================================================================================
+FILE: versions/035_paymentmethod_uppercase.py
+========================================================================================
+"""paymentmethod ENUM: add UPPERCASE values (SQLAlchemy serializes member NAME)
+
+Revision ID: 035_pm_upper
+Revises: 034_pm_card
+Create Date: 2026-05-18
+
+SQLAlchemy's `Enum(PaymentMethod)` column writes the enum MEMBER NAME
+(`'STRIPE'`), not the value (`'stripe'`), unless you pass a custom
+`values_callable`. The Postgres `paymentmethod` ENUM was created with
+UPPERCASE member names for every original crypto value (BTC, USDT_TRC20…)
+so writes lined up. Migration `034_pm_card` mistakenly added LOWERCASE
+values (`'stripe'`, `'mollie'`, …) which SQLAlchemy never writes — every
+Stripe create-invoice still fails with
+`invalid input value for enum paymentmethod: "STRIPE"`.
+
+This migration adds the matching UPPERCASE values so card-provider
+inserts succeed. The lowercase ones from 034 stay (Postgres has no
+`DROP VALUE`) but they're harmless — nothing writes them.
+"""
+
+from alembic import op
+
+
+revision = "035_pm_upper"
+down_revision = "034_pm_card"
+branch_labels = None
+depends_on = None
+
+
+NEW_VALUES = [
+    "STRIPE",
+    "MOLLIE",
+    "RAZORPAY",
+    "PAYME",
+    "CRYPTOPAY",
+    "NOWPAYMENTS",
+]
+
+
+def upgrade():
+    bind = op.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+    for v in NEW_VALUES:
+        op.execute(f"ALTER TYPE paymentmethod ADD VALUE IF NOT EXISTS '{v}'")
+
+
+def downgrade():
+    # Postgres has no `DROP VALUE`. Downgrade is a no-op — see 034.
+    pass
+
+========================================================================================
+FILE: versions/036_server_customer_visible.py
+========================================================================================
+"""servers.customer_visible — hide test servers from client portal
+
+Revision ID: 036_srv_visible
+Revises: 035_pm_upper
+Create Date: 2026-05-18
+
+`GET /client-portal/servers` listed every row in `servers`, so test boxes
+and staging servers leaked into the customer's location picker the moment
+an operator added them via the admin panel. Adding a `customer_visible`
+boolean (default True so existing rows keep their current behaviour) lets
+the admin gate which servers reach subscribers — flip from the Servers
+card menu in the admin UI.
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = "036_srv_visible"
+down_revision = "035_pm_upper"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    cols = {c["name"] for c in insp.get_columns("servers")}
+    if "customer_visible" not in cols:
+        op.add_column(
+            "servers",
+            sa.Column(
+                "customer_visible",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.true(),
+            ),
+        )
+
+
+def downgrade():
+    op.drop_column("servers", "customer_visible")
+
+========================================================================================
+FILE: versions/037_device_slots.py
+========================================================================================
+"""device_slots: one customer "device" spans peers on every customer-visible server
+
+Revision ID: 037_device_slots
+Revises: 036_srv_visible
+Create Date: 2026-05-19
+
+Implements the multi-server toggle. A "device slot" owns one shared keypair
+and one Client row on every customer-visible server; at any moment exactly
+one of those Client rows has ``enabled=True``. The portal toggle flips
+which one. Configs the user downloaded for the other regions stay on their
+phone but can't handshake until they're switched on server-side, so leaking
+the whole bundle doesn't give anyone extra access.
+
+Schema changes:
+
+1. New ``device_slots`` table — one row per device the subscription bought.
+2. ``client_user_clients.slot_id`` FK — links existing peer→user join rows
+   into a slot. Nullable so legacy single-server devices keep working.
+3. Drop the standalone ``UNIQUE(clients.public_key)`` index — the same
+   slot keypair shows up on every server now. Replace with a partial
+   composite unique on ``(public_key, server_id)`` so a single server
+   still can't have two peers with the same pubkey.
+4. Bump ``servers.max_clients`` default to 1000 (slots × N-servers fan-out
+   eats the old /24 + 250-client default within a handful of subscribers).
+   Existing rows are left alone — operators sized their own pools.
+
+Backward compatible: nothing is deleted, no rows changed, legacy code paths
+work unchanged.
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = "037_device_slots"
+down_revision = "036_srv_visible"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+
+    # ── 1. device_slots ─────────────────────────────────────────────────
+    if "device_slots" not in insp.get_table_names():
+        op.create_table(
+            "device_slots",
+            sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
+            sa.Column(
+                "client_user_id",
+                sa.Integer(),
+                sa.ForeignKey("client_users.id", ondelete="CASCADE"),
+                nullable=False,
+            ),
+            sa.Column("label", sa.String(64), nullable=False, server_default="Device"),
+            # Shared WG keypair across every server in the slot. Stored
+            # encrypted (same column type as Client.private_key).
+            sa.Column("public_key", sa.String(64), nullable=False),
+            sa.Column("private_key", sa.Text(), nullable=False),
+            sa.Column("preshared_key", sa.Text(), nullable=True),
+            sa.Column(
+                "active_server_id",
+                sa.Integer(),
+                sa.ForeignKey("servers.id", ondelete="SET NULL"),
+                nullable=True,
+            ),
+            # Rate-limit anchor. The toggle endpoint refuses a flip if the
+            # last one was less than ``SLOT_SWITCH_COOLDOWN`` ago.
+            sa.Column("last_switched_at", sa.DateTime(timezone=True), nullable=True),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.func.now(),
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.func.now(),
+            ),
+        )
+        op.create_index(
+            "ix_device_slots_client_user_id",
+            "device_slots",
+            ["client_user_id"],
+        )
+
+    # ── 2. client_user_clients.slot_id ─────────────────────────────────
+    cols_link = {c["name"] for c in insp.get_columns("client_user_clients")}
+    if "slot_id" not in cols_link:
+        op.add_column(
+            "client_user_clients",
+            sa.Column(
+                "slot_id",
+                sa.Integer(),
+                sa.ForeignKey("device_slots.id", ondelete="CASCADE"),
+                nullable=True,
+            ),
+        )
+        op.create_index(
+            "ix_client_user_clients_slot_id",
+            "client_user_clients",
+            ["slot_id"],
+        )
+
+    # ── 3. drop UNIQUE(clients.public_key), add composite ───────────────
+    # The original schema declared ``public_key UNIQUE`` on clients. With
+    # device slots that's wrong — the same key appears on every server.
+    # Replace it with a composite (public_key, server_id) so within one
+    # server pubkeys are still unique. Use a partial expression so proxy
+    # clients (NULL public_key) don't fight each other.
+    #
+    # In PostgreSQL `UNIQUE` on a column creates BOTH a constraint
+    # (``clients_public_key_key``) AND its backing index of the same name.
+    # ``op.drop_index`` fails with "cannot drop index … because constraint
+    # … requires it" — you have to drop the constraint, which auto-drops
+    # the index. Different DBs (and different schema versions) name these
+    # objects differently, so introspect and drop whatever we find.
+    cli_uniques = insp.get_unique_constraints("clients")
+    dropped_constraint_names = set()
+    for uc in cli_uniques:
+        if uc.get("column_names") == ["public_key"]:
+            op.drop_constraint(uc["name"], "clients", type_="unique")
+            dropped_constraint_names.add(uc["name"])
+    # After constraint drops the backing indexes are gone, but if a bare
+    # standalone unique index also exists (e.g. created via op.create_index
+    # in some historical revision rather than as a column UNIQUE) — clean
+    # that too. Skip names we already dropped via the constraint path.
+    cli_indexes = insp.get_indexes("clients")
+    for ix in cli_indexes:
+        if (ix.get("unique")
+                and ix.get("column_names") == ["public_key"]
+                and ix["name"] not in dropped_constraint_names):
+            try:
+                op.drop_index(ix["name"], table_name="clients")
+            except Exception:
+                # If the index is still backing some other constraint,
+                # the constraint loop will get it. Don't fail the migration
+                # on this best-effort cleanup.
+                pass
+
+    # Composite unique — partial WHERE public_key IS NOT NULL works on
+    # PostgreSQL; on SQLite Alembic emits a plain unique index (which is
+    # fine — NULLs don't collide there either by default).
+    existing_idx_names = {i["name"] for i in insp.get_indexes("clients")}
+    if "uq_clients_pubkey_server" not in existing_idx_names:
+        op.create_index(
+            "uq_clients_pubkey_server",
+            "clients",
+            ["public_key", "server_id"],
+            unique=True,
+            postgresql_where=sa.text("public_key IS NOT NULL"),
+        )
+
+
+def downgrade():
+    # Reverse order — drop dependent things first.
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+
+    if "uq_clients_pubkey_server" in {i["name"] for i in insp.get_indexes("clients")}:
+        op.drop_index("uq_clients_pubkey_server", table_name="clients")
+
+    # Best-effort restore of the legacy single-column unique. If duplicate
+    # public_keys snuck in via slot creation, this will fail loudly — which
+    # is correct, since downgrading would silently re-allow handshake
+    # collisions.
+    op.create_index(
+        "ix_clients_public_key",
+        "clients",
+        ["public_key"],
+        unique=True,
+    )
+
+    cols_link = {c["name"] for c in insp.get_columns("client_user_clients")}
+    if "slot_id" in cols_link:
+        op.drop_index("ix_client_user_clients_slot_id", table_name="client_user_clients")
+        op.drop_column("client_user_clients", "slot_id")
+
+    if "device_slots" in insp.get_table_names():
+        op.drop_index("ix_device_slots_client_user_id", table_name="device_slots")
+        op.drop_table("device_slots")
+
+========================================================================================
+FILE: versions/038_slot_switch_token_bucket.py
+========================================================================================
+"""device_slots: token-bucket rate limit on region switches
+
+Revision ID: 038_slot_tokens
+Revises: 037_device_slots
+Create Date: 2026-05-21
+
+Replaces the fixed 30s post-switch cooldown with a token-bucket. Each
+slot starts with 5 tokens; each switch consumes 1; tokens refill at one
+per ``SLOT_SWITCH_REFILL_SECONDS_PER_TOKEN`` (default 6s). Lets a
+customer burst-test a few regions in a row, still blocks a click-spammer
+or a bot once the bucket empties.
+
+``last_switched_at`` is kept as the refill anchor — the route layer reads
+``(now - last_switched_at) / refill_seconds`` to compute how many tokens
+have refilled since the previous switch, clamps to bucket size, and
+either consumes one or rejects with 429.
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = "038_slot_tokens"
+down_revision = "037_device_slots"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    # Default 5.0 so existing slots start with a full bucket the first
+    # time a customer hits the toggle after the upgrade — no surprise
+    # 429s right after a deploy.
+    op.add_column(
+        "device_slots",
+        sa.Column(
+            "switch_tokens",
+            sa.Float(),
+            nullable=False,
+            server_default="5.0",
+        ),
+    )
+
+
+def downgrade():
+    op.drop_column("device_slots", "switch_tokens")
+
+========================================================================================
+FILE: versions/039_client_user_email_optional.py
+========================================================================================
+"""client_users.email: make optional
+
+Revision ID: 039_email_optional
+Revises: 038_slot_tokens
+Create Date: 2026-05-26
+
+Operators on markets where customers expect total anonymity (WeChat /
+crypto buyers in Asia) reported that requiring an email at signup
+costs them conversions — many users will close the form rather than
+hand over a real address, and a throwaway one bounces every receipt
+and verification mail we send. Making the column nullable lets the
+registration form turn the field into "optional" without breaking
+existing rows, and lets login take either email or username (route
+layer handles the disambiguation).
+
+Existing rows keep their values — this is just a constraint relax.
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = "039_email_optional"
+down_revision = "038_slot_tokens"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    # Postgres + SQLite both support drop-not-null via alter_column.
+    # The unique index stays — NULL values are allowed in unique
+    # indexes (each NULL is treated as distinct), so empty-email rows
+    # don't collide.
+    op.alter_column(
+        "client_users",
+        "email",
+        existing_type=sa.String(length=255),
+        nullable=True,
+    )
+
+
+def downgrade():
+    op.alter_column(
+        "client_users",
+        "email",
+        existing_type=sa.String(length=255),
+        nullable=False,
+    )
+
+========================================================================================
+FILE: versions/040_encrypt_device_slot_keys.py
+========================================================================================
+"""device_slots: re-encrypt private_key + preshared_key in place
+
+Revision ID: 040_encrypt_slot_keys
+Revises: 039_email_optional
+Create Date: 2026-05-27
+
+Before this migration `DeviceSlot.private_key` and `.preshared_key` were
+plain `Text` columns — the slot's WireGuard secrets sat in the DB
+unencrypted, even though the model comment claimed `EncryptedText`.
+
+The model now uses `EncryptedText` for both fields. `EncryptedText`
+transparently reads legacy plain-text rows, so the schema stays
+`text`/`text` (no column-type change) — but we still want existing
+rows re-written so a DB dump stops leaking raw secrets.
+
+This migration loads every slot, runs each field through `EncryptedText`
+on write (which is a regular UPDATE for SQLAlchemy — process_bind_param
+encrypts), and commits. Idempotent: re-running on already-encrypted rows
+leaves them in their encrypted-with-current-key form.
+
+Downgrade is intentionally a no-op — going back would mean writing
+plain text back, which is the bug we're fixing.
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = "040_encrypt_slot_keys"
+down_revision = "039_email_optional"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    # Load EncryptedText through the same path the app uses so the key
+    # derivation matches at run time. Done inside the function body to
+    # avoid alembic-stamping-without-running pulling in app code.
+    from src.database.encrypted_type import EncryptedText
+
+    bind = op.get_bind()
+
+    slots_t = sa.Table(
+        "device_slots",
+        sa.MetaData(),
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("private_key", EncryptedText()),
+        sa.Column("preshared_key", EncryptedText()),
+    )
+
+    rows = bind.execute(sa.select(
+        slots_t.c.id, slots_t.c.private_key, slots_t.c.preshared_key,
+    )).fetchall()
+
+    for r in rows:
+        # process_bind_param re-encrypts on UPDATE; legacy plain-text
+        # rows become encrypted, already-encrypted rows are re-encrypted
+        # with the current key (a no-op semantically).
+        bind.execute(
+            slots_t.update()
+            .where(slots_t.c.id == r.id)
+            .values(
+                private_key=r.private_key,
+                preshared_key=r.preshared_key,
+            )
+        )
+
+
+def downgrade():
+    # Intentional no-op — we don't want to re-introduce plain-text
+    # secrets in the DB even on a rollback.
+    pass
+
+========================================================================================
+FILE: versions/041_device_slot_device_id.py
+========================================================================================
+"""device_slots: add device_id (Option B device-bind)
+
+Revision ID: 041_device_slot_device_id
+Revises: 040_encrypt_slot_keys
+Create Date: 2026-05-28
+
+Adds a nullable ``device_id`` column to ``device_slots``. NULL means
+"unbound — first device to fetch wg-quick claims it". Once set, the
+wg-quick endpoint (``GET /client-portal/devices/{slot_id}/config/{server_id}``)
+rejects requests whose ``X-Device-Id`` header doesn't match. The
+customer-facing release endpoint clears it so a user can re-bind from
+a new phone.
+
+We add an index because the column is queried in every wg-quick fetch
+(`UPDATE device_slots SET device_id = :x WHERE id = :s AND device_id IS NULL`),
+and we want the WHERE clause to use an index seek rather than a row
+scan when slot tables grow.
+
+Downgrade drops the index and the column. No data is migrated either
+direction — existing rows simply start unbound, which is correct: any
+phone that's already running with a slot will claim it on its next
+connect (and from then on the bind enforces single-device).
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = "041_device_slot_device_id"
+down_revision = "040_encrypt_slot_keys"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    op.add_column(
+        "device_slots",
+        sa.Column("device_id", sa.String(length=64), nullable=True),
+    )
+    op.create_index(
+        "ix_device_slots_device_id",
+        "device_slots",
+        ["device_id"],
+        unique=False,
+    )
+
+
+def downgrade():
+    op.drop_index("ix_device_slots_device_id", table_name="device_slots")
+    op.drop_column("device_slots", "device_id")
+
+========================================================================================
+FILE: versions/042_app_features_batch.py
+========================================================================================
+"""servers: for_app_only / auto-hide tracking + fcm_tokens table
+
+Revision ID: 042_app_features_batch
+Revises: 041_device_slot_device_id
+Create Date: 2026-05-30
+
+Bundles four panel-side features requested by operators (2026-05-28):
+
+1. ``servers.for_app_only`` — when True, the server is shown only to
+   requests identified as the mobile/desktop app (X-Client-App header
+   or BrandVPN/* UA). Web portal users and subscription URL
+   fetchers don't see it. Default False (existing rows behave as
+   before).
+2. ``servers.last_good_health_at`` — DATETIME timestamp updated by the
+   health checker on every successful poll. Drives auto-hide.
+3. ``servers.force_visible`` — admin override for auto-hide. When True,
+   the server stays visible even if the last good health is older than
+   the threshold. Default False (auto-hide enabled).
+4. ``fcm_tokens`` — per-installation FCM device tokens for push
+   notifications. One user can have many (one per install). The
+   ``device_id`` field mirrors ``device_slots.device_id`` so the same
+   X-Device-Id from the app maps a slot to its FCM token.
+
+Downgrade strips columns and the table; rows are not migrated.
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = "042_app_features_batch"
+down_revision = "041_device_slot_device_id"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    # 1-3. servers extensions
+    op.add_column(
+        "servers",
+        sa.Column(
+            "for_app_only",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.text("false"),
+        ),
+    )
+    op.add_column(
+        "servers",
+        sa.Column("last_good_health_at", sa.DateTime(timezone=True), nullable=True),
+    )
+    op.add_column(
+        "servers",
+        sa.Column(
+            "force_visible",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.text("false"),
+        ),
+    )
+
+    # 4. fcm_tokens table — one row per (user, installation) pair.
+    op.create_table(
+        "fcm_tokens",
+        sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
+        sa.Column(
+            "user_id",
+            sa.Integer(),
+            sa.ForeignKey("client_users.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("device_id", sa.String(length=64), nullable=False),
+        sa.Column("platform", sa.String(length=16), nullable=False),
+        sa.Column("token", sa.Text(), nullable=False),
+        sa.Column(
+            "last_seen_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
+        sa.UniqueConstraint("user_id", "device_id", name="uq_fcm_user_device"),
+    )
+    op.create_index("ix_fcm_tokens_user_id", "fcm_tokens", ["user_id"], unique=False)
+    op.create_index("ix_fcm_tokens_device_id", "fcm_tokens", ["device_id"], unique=False)
+
+
+def downgrade():
+    op.drop_index("ix_fcm_tokens_device_id", table_name="fcm_tokens")
+    op.drop_index("ix_fcm_tokens_user_id", table_name="fcm_tokens")
+    op.drop_table("fcm_tokens")
+    op.drop_column("servers", "force_visible")
+    op.drop_column("servers", "last_good_health_at")
+    op.drop_column("servers", "for_app_only")
+
+========================================================================================
+FILE: versions/043_device_slot_bind_timestamps.py
+========================================================================================
+"""device_slots: add device_bound_at + device_last_seen_at for stale-bind auto-release
+
+Revision ID: 043_device_slot_bind_timestamps
+Revises: 042_app_features_batch
+Create Date: 2026-05-31
+
+Background: device slots could remain locked after the app lost its local
+identifier or after an update. The original device-bind was binary — once
+the slot's ``device_id``
+was set, any other device id was hard-403'd forever, with no path
+to recover other than the admin clicking Release. expo-secure-store
+losing the cached UUID on Android (force-close mid-write,
+keystore reset, OS app-data wipe) was enough to permanently brick
+the slot until manual intervention.
+
+Fix: stamp ``device_bound_at`` when a slot first binds and
+``device_last_seen_at`` on every matched wg-quick fetch. The
+``get_slot_config`` endpoint now silently rebinds when a mismatching
+device_id arrives AND the old bind hasn't been seen in
+``STALE_BIND_MINUTES`` (5 minutes — short enough that a real
+two-customer-sharing-one-account scenario still bumps the heartbeat,
+long enough that a force-close-reopen cycle clears cleanly).
+
+Backfills are unnecessary; both columns default to NULL on existing
+rows. Existing bound slots get treated as "bound but never seen" on
+the first new request — the bind still enforces, the timestamp gets
+set then.
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = "043_device_slot_bind_timestamps"
+down_revision = "042_app_features_batch"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    op.add_column(
+        "device_slots",
+        sa.Column("device_bound_at", sa.DateTime(), nullable=True),
+    )
+    op.add_column(
+        "device_slots",
+        sa.Column("device_last_seen_at", sa.DateTime(), nullable=True),
+    )
+
+
+def downgrade():
+    op.drop_column("device_slots", "device_last_seen_at")
+    op.drop_column("device_slots", "device_bound_at")
+
+========================================================================================
+FILE: versions/044_paymentmethod_paylio.py
+========================================================================================
+"""paymentmethod ENUM: add 'paylio'
+
+Revision ID: 044_pm_paylio
+Revises: 043_device_slot_bind_timestamps
+Create Date: 2026-06-01
+
+`client_portal_payments.payment_method` is a Postgres ENUM. Adding the
+PayLio provider without ALTER TYPE makes every paylio checkout 500 the
+portal with `invalid input value for enum paymentmethod: "paylio"`.
+
+Mirrors 034_pm_card. `IF NOT EXISTS` keeps re-runs safe.
+"""
+
+from alembic import op
+
+
+revision = "044_pm_paylio"
+down_revision = "043_device_slot_bind_timestamps"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    bind = op.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+    # SQLAlchemy's SQLEnum serialises by member NAME, so the enum value
+    # in Postgres must be the uppercase Python name ('PAYLIO'), not the
+    # lowercase ``str`` value ('paylio'). Matches the pattern set by
+    # 035_paymentmethod_uppercase. The lowercase variant is added too
+    # for backward compatibility with any code path that writes the
+    # raw `provider` string verbatim.
+    op.execute("ALTER TYPE paymentmethod ADD VALUE IF NOT EXISTS 'PAYLIO'")
+    op.execute("ALTER TYPE paymentmethod ADD VALUE IF NOT EXISTS 'paylio'")
+
+
+def downgrade():
+    pass
+
+========================================================================================
+FILE: versions/045_subscription_plan_pricing_tiers.py
+========================================================================================
+"""subscription_plans.pricing_tiers JSON column
+
+Revision ID: 045_pricing_tiers
+Revises: 044_pm_paylio
+Create Date: 2026-06-06
+
+Adds a `pricing_tiers` JSON column to `subscription_plans` so an
+operator can define arbitrary (duration_days, price_usd, label) tuples
+per plan instead of being limited to the hard-coded monthly /
+quarterly / yearly trio.
+
+Backward-compatible: when the column is NULL (or empty list), the
+existing monthly/quarterly/yearly logic still runs. New plans created
+through the admin can opt-in to richer tier ladders (2-month, 6-month,
+2-year, multi-device tiers, trial periods, etc).
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = "045_pricing_tiers"
+down_revision = "044_pm_paylio"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        # JSONB is searchable + indexable; safer than plain JSON.
+        op.add_column(
+            "subscription_plans",
+            sa.Column("pricing_tiers", sa.dialects.postgresql.JSONB, nullable=True),
+        )
+    else:
+        # SQLite + others: fall back to TEXT/JSON.
+        op.add_column(
+            "subscription_plans",
+            sa.Column("pricing_tiers", sa.JSON, nullable=True),
+        )
+
+
+def downgrade():
+    op.drop_column("subscription_plans", "pricing_tiers")
+
+========================================================================================
+FILE: versions/046_per_platform_server_visibility.py
+========================================================================================
+"""per-platform customer visibility on servers
+
+Revision ID: 046_platform_vis
+Revises: 045_pricing_tiers
+Create Date: 2026-06-08
+
+Adds two boolean columns to `servers`:
+
+  - customer_visible_mobile    default TRUE
+  - customer_visible_windows   default TRUE
+
+Both default to TRUE so existing rows behave exactly as before — the
+new toggles are opt-OUT. Operator (2026-06-08) wants to hide
+bandwidth-heavy servers from desktop clients (where users consume an
+order of magnitude more traffic than on mobile) without losing those
+servers for the mobile audience, or vice versa.
+
+The detection of which platform a customer-portal request belongs to
+lives in `src/api/routes/client_portal.py` as `_is_windows_app` /
+`_is_mobile_app`, layered on top of the existing
+`_is_client_app_request` (X-Client-App header + User-Agent prefix).
+"""
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = "046_platform_vis"
+down_revision = "045_pricing_tiers"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.add_column(
+        "servers",
+        sa.Column(
+            "customer_visible_mobile",
+            sa.Boolean(),
+            server_default=sa.text("true"),
+            nullable=False,
+        ),
+    )
+    op.add_column(
+        "servers",
+        sa.Column(
+            "customer_visible_windows",
+            sa.Boolean(),
+            server_default=sa.text("true"),
+            nullable=False,
+        ),
+    )
+
+
+def downgrade() -> None:
+    op.drop_column("servers", "customer_visible_windows")
+    op.drop_column("servers", "customer_visible_mobile")
+
+========================================================================================
+FILE: versions/047_promo_redemptions.py
+========================================================================================
+"""per-user promo redemption tracking
+
+Revision ID: 047_promo_redempt
+Revises: 046_platform_vis
+Create Date: 2026-06-15
+
+Adds a `promo_redemptions` table so a promo code can be redeemed at most once
+per portal user. Before this, `/promo CODE` only checked the global
+`promo_codes.used_count`, so a `days`-type code (which directly extends the
+subscription) could be re-run by the same user N times for N× free days, and a
+`percent` code could be spammed to exhaust a limited code's global budget.
+
+Purely additive — a new table with a UNIQUE(promo_code_id, client_user_id)
+constraint. No change to existing tables/rows, so existing installs behave
+exactly as before until the new bot logic starts recording redemptions.
+"""
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = "047_promo_redempt"
+down_revision = "046_platform_vis"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.create_table(
+        "promo_redemptions",
+        sa.Column("id", sa.Integer(), primary_key=True),
+        sa.Column(
+            "promo_code_id",
+            sa.Integer(),
+            sa.ForeignKey("promo_codes.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "client_user_id",
+            sa.Integer(),
+            sa.ForeignKey("client_users.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "redeemed_at",
+            sa.DateTime(),
+            server_default=sa.text("CURRENT_TIMESTAMP"),
+            nullable=False,
+        ),
+        sa.UniqueConstraint(
+            "promo_code_id", "client_user_id", name="uq_promo_redemption_user"
+        ),
+    )
+    op.create_index(
+        "ix_promo_redemptions_user", "promo_redemptions", ["client_user_id"]
+    )
+
+
+def downgrade() -> None:
+    op.drop_index("ix_promo_redemptions_user", table_name="promo_redemptions")
+    op.drop_table("promo_redemptions")
+
+========================================================================================
+FILE: versions/048_client_segments.py
+========================================================================================
+"""client segments — operator grouping with a shared rule template
+
+Revision ID: 048_client_segments
+Revises: 047_promo_redempt
+Create Date: 2026-06-25
+
+Additive: new client_segments table + nullable clients.segment_id (ON DELETE SET NULL).
+Existing rows unaffected (segment_id defaults NULL = ungrouped).
+"""
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = "048_client_segments"
+down_revision = "047_promo_redempt"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.create_table(
+        "client_segments",
+        sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
+        sa.Column("name", sa.String(length=100), nullable=False),
+        sa.Column("color", sa.String(length=16), nullable=True),
+        sa.Column("notes", sa.Text(), nullable=True),
+        sa.Column("bandwidth_limit", sa.Integer(), nullable=True),
+        sa.Column("traffic_limit_mb", sa.Integer(), nullable=True),
+        sa.Column("expiry_date", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("auto_bandwidth_rule_id", sa.Integer(),
+                  sa.ForeignKey("traffic_rules.id", ondelete="SET NULL"), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.UniqueConstraint("name", name="uq_client_segments_name"),
+    )
+    op.add_column("clients", sa.Column("segment_id", sa.Integer(),
+                  sa.ForeignKey("client_segments.id", ondelete="SET NULL"), nullable=True))
+    op.create_index("ix_clients_segment_id", "clients", ["segment_id"])
+
+
+def downgrade() -> None:
+    op.drop_index("ix_clients_segment_id", table_name="clients")
+    op.drop_column("clients", "segment_id")
+    op.drop_table("client_segments")
+
+========================================================================================
+FILE: versions/049_client_user_clients_slot_index.py
+========================================================================================
+"""index client_user_clients.slot_id
+
+Revision ID: 049_cuc_slot_idx
+Revises: 048_client_segments
+Create Date: 2026-06-22
+
+Adds an index on ``client_user_clients.slot_id``. This link table is the
+busiest in the schema — ``slot_id IN (...)`` is filtered on nearly every
+authenticated customer request (``/devices``, ``/subscription``, slot heal /
+peer lookups) — yet ``slot_id`` had no index. The only existing index was the
+``UNIQUE(client_user_id, client_id)`` constraint, which can prefix-serve
+``client_user_id`` lookups but does nothing for ``slot_id`` filters, so those
+were full scans of the table.
+
+Purely additive (a new index). No data change; safe to run on a live DB — the
+table is small relative to the peer tables and the create is brief.
+"""
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = "049_cuc_slot_idx"
+down_revision = "048_client_segments"
+branch_labels = None
+depends_on = None
+
+_INDEX = "ix_cuc_slot_id"
+_TABLE = "client_user_clients"
+
+
+def _has_index(bind) -> bool:
+    insp = sa.inspect(bind)
+    if _TABLE not in insp.get_table_names():
+        return True  # nothing to index (fresh/odd schema) — treat as done
+    return any(ix["name"] == _INDEX for ix in insp.get_indexes(_TABLE))
+
+
+def upgrade() -> None:
+    bind = op.get_bind()
+    if not _has_index(bind):
+        op.create_index(_INDEX, _TABLE, ["slot_id"])
+
+
+def downgrade() -> None:
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    if _TABLE in insp.get_table_names() and any(
+        ix["name"] == _INDEX for ix in insp.get_indexes(_TABLE)
+    ):
+        op.drop_index(_INDEX, table_name=_TABLE)
+
+========================================================================================
+FILE: versions/050_backfill_admin_superadmin.py
+========================================================================================
+"""backfill is_superadmin for owner accounts
+
+Some installs carry an owner admin row whose is_superadmin flag was never set
+(created before the flag mattered, or restored from an older backup). The RBAC
+router-gating added in 2.2.35 requires is_superadmin (or a granted permission)
+on every data endpoint, so such an owner gets 403'd off their entire panel after
+updating. Backfill the owner (and legacy NULL-role rows, which on a single-admin
+install ARE the owner) to is_superadmin=true so they keep full access. Delegated
+admin/manager rows are left untouched — their scoping is intentional.
+
+Belt to the code-side owner-safety in middleware/auth.py (owner role bypasses the
+permission gate regardless of this flag).
+
+Revision ID: 050_admin_superadmin_backfill
+Revises: 049_cuc_slot_idx
+Create Date: 2026-07-14
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+revision = '050_admin_superadmin_backfill'
+down_revision = '049_cuc_slot_idx'
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    conn = op.get_bind()
+    try:
+        conn.execute(sa.text(
+            "UPDATE admin_users SET is_superadmin = true "
+            "WHERE role = 'owner' OR role IS NULL"
+        ))
+    except Exception:
+        # Legacy installs whose admin_users shape differs (e.g. no is_superadmin
+        # column yet) are covered by the code-side owner fail-safe; never fail the
+        # whole migration chain over this hygiene backfill.
+        pass
+
+
+def downgrade():
+    # One-way data backfill — prior per-row values are not recoverable. No-op.
+    pass
+
+========================================================================================
+FILE: versions/051_vless_reality_columns.py
+========================================================================================
+"""add VLESS-Reality columns to servers
+
+Revision ID: 051_vless_reality
+Revises: 050_admin_superadmin_backfill
+"""
+from alembic import op
+import sqlalchemy as sa
+
+revision = "051_vless_reality"
+down_revision = "050_admin_superadmin_backfill"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    with op.batch_alter_table("servers") as b:
+        b.add_column(sa.Column("proxy_reality_private_key", sa.String(120), nullable=True))
+        b.add_column(sa.Column("proxy_reality_public_key", sa.String(120), nullable=True))
+        b.add_column(sa.Column("proxy_reality_short_id", sa.String(32), nullable=True))
+
+
+def downgrade():
+    with op.batch_alter_table("servers") as b:
+        b.drop_column("proxy_reality_short_id")
+        b.drop_column("proxy_reality_public_key")
+        b.drop_column("proxy_reality_private_key")
+
+========================================================================================
+FILE: versions/052_portal_rate_limits.py
+========================================================================================
+"""add persistent client-portal rate-limit counters
+
+Revision ID: 052_portal_rate_limits
+Revises: 051_vless_reality
+"""
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = "052_portal_rate_limits"
+down_revision = "051_vless_reality"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    op.create_table(
+        "portal_rate_limits",
+        sa.Column("bucket_key", sa.String(length=128), nullable=False),
+        sa.Column("window_started_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column(
+            "request_count",
+            sa.Integer(),
+            nullable=False,
+            server_default=sa.text("1"),
+        ),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.PrimaryKeyConstraint("bucket_key"),
+    )
+    op.create_index(
+        "ix_portal_rate_limits_updated_at",
+        "portal_rate_limits",
+        ["updated_at"],
+        unique=False,
+    )
+
+
+def downgrade():
+    op.drop_index(
+        "ix_portal_rate_limits_updated_at",
+        table_name="portal_rate_limits",
+    )
+    op.drop_table("portal_rate_limits")
+
+========================================================================================
+FILE: versions/053_client_refresh_tokens.py
+========================================================================================
+"""add rotating client-portal refresh tokens
+
+Revision ID: 053_client_refresh_tokens
+Revises: 052_portal_rate_limits
+"""
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = "053_client_refresh_tokens"
+down_revision = "052_portal_rate_limits"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    op.create_table(
+        "client_refresh_tokens",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("token_hash", sa.String(length=64), nullable=False),
+        sa.Column("family_id", sa.String(length=64), nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("last_used_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("replaced_by_hash", sa.String(length=64), nullable=True),
+        sa.ForeignKeyConstraint(
+            ["user_id"],
+            ["client_users.id"],
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(
+        "ix_client_refresh_tokens_user_id",
+        "client_refresh_tokens",
+        ["user_id"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_client_refresh_tokens_token_hash",
+        "client_refresh_tokens",
+        ["token_hash"],
+        unique=True,
+    )
+    op.create_index(
+        "ix_client_refresh_tokens_family_id",
+        "client_refresh_tokens",
+        ["family_id"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_client_refresh_tokens_expires_at",
+        "client_refresh_tokens",
+        ["expires_at"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_client_refresh_tokens_user_family",
+        "client_refresh_tokens",
+        ["user_id", "family_id"],
+        unique=False,
+    )
+
+
+def downgrade():
+    op.drop_index(
+        "ix_client_refresh_tokens_user_family",
+        table_name="client_refresh_tokens",
+    )
+    op.drop_index(
+        "ix_client_refresh_tokens_expires_at",
+        table_name="client_refresh_tokens",
+    )
+    op.drop_index(
+        "ix_client_refresh_tokens_family_id",
+        table_name="client_refresh_tokens",
+    )
+    op.drop_index(
+        "ix_client_refresh_tokens_token_hash",
+        table_name="client_refresh_tokens",
+    )
+    op.drop_index(
+        "ix_client_refresh_tokens_user_id",
+        table_name="client_refresh_tokens",
+    )
+    op.drop_table("client_refresh_tokens")
+
+========================================================================================
+FILE: versions/054_client_account_balance.py
+========================================================================================
+"""add client account balances and immutable transaction ledger
+
+Revision ID: 054_client_account_balance
+Revises: 053_client_refresh_tokens
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = "054_client_account_balance"
+down_revision = "053_client_refresh_tokens"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    op.add_column(
+        "client_portal_payments",
+        sa.Column("purpose", sa.String(length=32), nullable=False, server_default="subscription"),
+    )
+    op.add_column(
+        "client_portal_payments",
+        sa.Column("balance_credit_minor", sa.BigInteger(), nullable=True),
+    )
+    op.create_index(
+        "ix_client_portal_payments_purpose",
+        "client_portal_payments",
+        ["purpose"],
+        unique=False,
+    )
+
+    op.create_table(
+        "client_account_balances",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("currency", sa.String(length=3), nullable=False, server_default="USD"),
+        sa.Column("available_minor", sa.BigInteger(), nullable=False, server_default="0"),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.ForeignKeyConstraint(["user_id"], ["client_users.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("user_id", name="uq_client_account_balances_user_id"),
+        sa.CheckConstraint("available_minor >= 0", name="ck_client_account_balance_nonnegative"),
+    )
+    op.create_table(
+        "client_balance_transactions",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("amount_minor", sa.BigInteger(), nullable=False),
+        sa.Column("balance_after_minor", sa.BigInteger(), nullable=False),
+        sa.Column("currency", sa.String(length=3), nullable=False, server_default="USD"),
+        sa.Column("transaction_type", sa.String(length=32), nullable=False),
+        sa.Column("reference", sa.String(length=255), nullable=True),
+        sa.Column("description", sa.String(length=500), nullable=True),
+        sa.Column("actor_type", sa.String(length=32), nullable=False, server_default="system"),
+        sa.Column("actor_id", sa.String(length=100), nullable=True),
+        sa.Column("idempotency_key", sa.String(length=160), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.ForeignKeyConstraint(["user_id"], ["client_users.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("idempotency_key", name="uq_client_balance_tx_idempotency_key"),
+    )
+    op.create_index(
+        "ix_client_balance_transactions_user_id",
+        "client_balance_transactions",
+        ["user_id"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_client_balance_transactions_transaction_type",
+        "client_balance_transactions",
+        ["transaction_type"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_client_balance_transactions_reference",
+        "client_balance_transactions",
+        ["reference"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_client_balance_transactions_created_at",
+        "client_balance_transactions",
+        ["created_at"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_client_balance_user_created",
+        "client_balance_transactions",
+        ["user_id", "created_at"],
+        unique=False,
+    )
+
+
+def downgrade():
+    op.drop_index("ix_client_balance_user_created", table_name="client_balance_transactions")
+    op.drop_index("ix_client_balance_transactions_created_at", table_name="client_balance_transactions")
+    op.drop_index("ix_client_balance_transactions_reference", table_name="client_balance_transactions")
+    op.drop_index("ix_client_balance_transactions_transaction_type", table_name="client_balance_transactions")
+    op.drop_index("ix_client_balance_transactions_user_id", table_name="client_balance_transactions")
+    op.drop_table("client_balance_transactions")
+    op.drop_table("client_account_balances")
+    op.drop_index("ix_client_portal_payments_purpose", table_name="client_portal_payments")
+    op.drop_column("client_portal_payments", "balance_credit_minor")
+    op.drop_column("client_portal_payments", "purpose")
+
+========================================================================================
+FILE: versions/055_dns_protection.py
+========================================================================================
+"""add per-device DNS protection profiles and policies
+
+Revision ID: 055_dns_protection
+Revises: 054_client_account_balance
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = "055_dns_protection"
+down_revision = "054_client_account_balance"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    op.create_table(
+        "dns_profiles",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("mode", sa.String(length=48), nullable=True),
+        sa.Column("name", sa.String(length=100), nullable=False),
+        sa.Column("description", sa.String(length=500), nullable=True),
+        sa.Column("resolver_addresses", sa.JSON(), nullable=False, server_default="[]"),
+        sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column("is_default", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column("customer_selectable", sa.Boolean(), nullable=False, server_default=sa.true()),
+        sa.Column("is_custom", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.CheckConstraint("length(name) > 0", name="ck_dns_profiles_name_nonempty"),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("mode", name="uq_dns_profiles_mode"),
+    )
+    op.create_table(
+        "dns_policy_assignments",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("profile_id", sa.Integer(), nullable=False),
+        sa.Column("scope_type", sa.String(length=24), nullable=False),
+        sa.Column("scope_value", sa.String(length=100), nullable=False),
+        sa.Column("enforced", sa.Boolean(), nullable=False, server_default=sa.true()),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.CheckConstraint(
+            "scope_type IN ('plan','segment','client','device')",
+            name="ck_dns_policy_scope_type",
+        ),
+        sa.ForeignKeyConstraint(["profile_id"], ["dns_profiles.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("scope_type", "scope_value", name="uq_dns_policy_scope"),
+    )
+    op.create_index("ix_dns_policy_assignments_profile_id", "dns_policy_assignments", ["profile_id"])
+    op.create_index("ix_dns_policy_assignments_scope_type", "dns_policy_assignments", ["scope_type"])
+    op.create_index("ix_dns_policy_assignments_scope_value", "dns_policy_assignments", ["scope_value"])
+    op.add_column("device_slots", sa.Column("dns_profile_id", sa.Integer(), nullable=True))
+    op.create_foreign_key(
+        "fk_device_slots_dns_profile", "device_slots", "dns_profiles",
+        ["dns_profile_id"], ["id"], ondelete="SET NULL",
+    )
+    op.create_index("ix_device_slots_dns_profile_id", "device_slots", ["dns_profile_id"])
+    op.add_column("clients", sa.Column("dns_profile_id", sa.Integer(), nullable=True))
+    op.create_foreign_key(
+        "fk_clients_dns_profile", "clients", "dns_profiles",
+        ["dns_profile_id"], ["id"], ondelete="SET NULL",
+    )
+    op.create_index("ix_clients_dns_profile_id", "clients", ["dns_profile_id"])
+
+
+def downgrade():
+    op.drop_index("ix_clients_dns_profile_id", table_name="clients")
+    op.drop_constraint("fk_clients_dns_profile", "clients", type_="foreignkey")
+    op.drop_column("clients", "dns_profile_id")
+    op.drop_index("ix_device_slots_dns_profile_id", table_name="device_slots")
+    op.drop_constraint("fk_device_slots_dns_profile", "device_slots", type_="foreignkey")
+    op.drop_column("device_slots", "dns_profile_id")
+    op.drop_index("ix_dns_policy_assignments_scope_value", table_name="dns_policy_assignments")
+    op.drop_index("ix_dns_policy_assignments_scope_type", table_name="dns_policy_assignments")
+    op.drop_index("ix_dns_policy_assignments_profile_id", table_name="dns_policy_assignments")
+    op.drop_table("dns_policy_assignments")
+    op.drop_table("dns_profiles")
+
+========================================================================================
+FILE: versions/056_balance_auto_renewal.py
+========================================================================================
+"""add explicit balance-funded subscription auto-renewal consent
+
+Revision ID: 056_balance_auto_renewal
+Revises: 055_dns_protection
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = "056_balance_auto_renewal"
+down_revision = "055_dns_protection"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    op.add_column(
+        "client_portal_subscriptions",
+        sa.Column("auto_renew_source", sa.String(length=20), nullable=True),
+    )
+    op.add_column(
+        "client_portal_subscriptions",
+        sa.Column("auto_renew_duration_days", sa.Integer(), nullable=True),
+    )
+    op.add_column(
+        "client_portal_subscriptions",
+        sa.Column("auto_renew_consent_at", sa.DateTime(timezone=True), nullable=True),
+    )
+    op.create_check_constraint(
+        "ck_subscription_auto_renew_source",
+        "client_portal_subscriptions",
+        "auto_renew_source IS NULL OR auto_renew_source = 'balance'",
+    )
+    op.create_check_constraint(
+        "ck_subscription_auto_renew_duration",
+        "client_portal_subscriptions",
+        "auto_renew_duration_days IS NULL OR auto_renew_duration_days IN (30, 90, 365)",
+    )
+
+
+def downgrade():
+    op.drop_constraint(
+        "ck_subscription_auto_renew_duration",
+        "client_portal_subscriptions",
+        type_="check",
+    )
+    op.drop_constraint(
+        "ck_subscription_auto_renew_source",
+        "client_portal_subscriptions",
+        type_="check",
+    )
+    op.drop_column("client_portal_subscriptions", "auto_renew_consent_at")
+    op.drop_column("client_portal_subscriptions", "auto_renew_duration_days")
+    op.drop_column("client_portal_subscriptions", "auto_renew_source")
+
+========================================================================================
+FILE: versions/057_google_play_subscriptions.py
+========================================================================================
+"""add server-verified Google Play subscription state
+
+Revision ID: 057_google_play_subscriptions
+Revises: 056_balance_auto_renewal
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = "057_google_play_subscriptions"
+down_revision = "056_balance_auto_renewal"
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    op.add_column(
+        "client_portal_subscriptions",
+        sa.Column("billing_source", sa.String(length=32), nullable=True),
+    )
+    op.add_column(
+        "client_portal_subscriptions",
+        sa.Column("billing_reference", sa.String(length=160), nullable=True),
+    )
+    op.create_index(
+        "ix_cps_billing_reference",
+        "client_portal_subscriptions",
+        ["billing_source", "billing_reference"],
+        unique=False,
+    )
+    op.create_table(
+        "google_play_subscriptions",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("purchase_token_hash", sa.String(length=64), nullable=False),
+        sa.Column("purchase_token", sa.Text(), nullable=False),
+        sa.Column("product_id", sa.String(length=100), nullable=False),
+        sa.Column("base_plan_id", sa.String(length=100), nullable=False),
+        sa.Column("plan_tier", sa.String(length=50), nullable=False),
+        sa.Column("subscription_state", sa.String(length=80), nullable=False),
+        sa.Column("expiry_time", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("auto_renewing", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column("acknowledged", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column("order_id", sa.String(length=255), nullable=True),
+        sa.Column("last_verified_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.ForeignKeyConstraint(["user_id"], ["client_users.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(
+        "ix_google_play_subscriptions_user_id",
+        "google_play_subscriptions",
+        ["user_id"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_google_play_subscriptions_token_hash",
+        "google_play_subscriptions",
+        ["purchase_token_hash"],
+        unique=True,
+    )
+    op.create_index(
+        "ix_google_play_subscriptions_expiry",
+        "google_play_subscriptions",
+        ["expiry_time"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_google_play_subscriptions_order_id",
+        "google_play_subscriptions",
+        ["order_id"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_google_play_user_state",
+        "google_play_subscriptions",
+        ["user_id", "subscription_state"],
+        unique=False,
+    )
+
+
+def downgrade():
+    op.drop_table("google_play_subscriptions")
+    op.drop_index(
+        "ix_cps_billing_reference",
+        table_name="client_portal_subscriptions",
+    )
+    op.drop_column("client_portal_subscriptions", "billing_reference")
+    op.drop_column("client_portal_subscriptions", "billing_source")
+

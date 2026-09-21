@@ -14,6 +14,8 @@
 # Tear down:
 #   docker compose -f docker-compose.dev.yml down -v   (also wipes the DB volume)
 
+# docker-compose.dev.yml — minimal stack for Flirexa development.
+
 version: "3.9"
 
 services:
@@ -25,7 +27,7 @@ services:
       POSTGRES_PASSWORD: flirexa-dev
       POSTGRES_DB: flirexa_dev
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - flirexa_dev_pgdata:/var/lib/postgresql/data
     healthcheck:

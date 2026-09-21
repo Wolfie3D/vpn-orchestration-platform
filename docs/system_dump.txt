@@ -1,0 +1,4473 @@
+PROJECT SYSTEM DUMP
+Root: /home/wolfie/projects/personal/flirexa/docs
+
+Excluded directories: .cache, .git, .idea, .mypy_cache, .next, .pytest_cache, .tox, .venv, .vscode, __pycache__, build, dist, env, node_modules, venv
+Binary/unreadable files are listed but their bytes are not included.
+
+========================================================================================
+FILE: add-server.md
+========================================================================================
+# Adding Servers
+
+_Last verified: 2026-07-24._
+
+Flirexa can manage WireGuard on multiple servers. The local server is registered automatically during installation. Additional remote servers are added through the admin panel.
+
+> **Paid feature.** Multi-server orchestration and the remote agent are a
+> **Business-tier** capability. On FREE, one install host can run one WireGuard
+> and one AmneziaWG endpoint. The working agent implementation is delivered
+> separately; similarly named files in this public repository are API-contract
+> stubs, not a standalone agent distribution.
+
+---
+
+## How Remote Servers Work
+
+Each remote server runs a lightweight HTTP agent (`vpnmanager-agent`). The main server communicates with it over HTTP using an API key for authentication.
+
+**Bootstrap flow:**
+1. You provide SSH credentials for the remote server
+2. The main server connects via SSH, installs the agent, and starts it as a systemd service
+3. After bootstrap, SSH is no longer needed — all ongoing operations go through the agent's HTTP API
+
+If SSH bootstrap is not suitable, follow the manual-agent instructions included
+with the licensed agent package. They are versioned together; do not copy a stub
+from this repository or an agent from a different release.
+
+---
+
+## Adding a Server via SSH Bootstrap (Recommended)
+
+1. Go to **Servers → Add Server**
+2. Fill in:
+   - **Name** — a label for this server
+   - **Endpoint** — public IP and WireGuard port, e.g. `203.0.113.10:51820`
+   - **Interface** — WireGuard interface name, e.g. `wg0` (or `awg0` for AmneziaWG)
+   - **Server Type** — `wireguard` or `amneziawg`
+   - **SSH Host** — IP or hostname for SSH access
+   - **SSH Port** — default 22
+   - **SSH User** — usually `root`
+   - **SSH Password** or **SSH Private Key**
+3. Click **Save**, then click **Install Agent**
+
+The system connects via SSH, uploads the licensed agent package, installs
+dependencies into a dedicated venv at `/opt/vpnmanager-agent/`, creates a systemd
+service, and verifies the agent is running.
+
+After successful bootstrap, the server switches to **agent mode** automatically.
+
+### Bootstrap Requirements
+
+- The remote server must be reachable from the main server over SSH
+- Root or sudo access required
+- Python 3.10+ must be available on the remote server
+- Port 8001 (agent) must be accessible from the main server, preferably through a
+  private network or a firewall rule limited to that source
+
+The bootstrap script checks for WireGuard or AmneziaWG tools and returns an error early if they are missing rather than proceeding with a broken installation.
+
+---
+
+## Server Types
+
+### WireGuard
+
+Standard protocol. Works with the `wg` / `wg-quick` tools. The interface is typically `wg0`.
+
+```
+Interface: wg0
+Config path: /etc/wireguard/wg0.conf
+```
+
+### AmneziaWG
+
+Obfuscated WireGuard. Requires the `amneziawg-dkms` kernel module and `awg` / `awg-quick` tools. The interface is typically `awg0`.
+
+```
+Interface: awg0
+Config path: /etc/amneziawg/awg0.conf
+```
+
+When you select `amneziawg` as the server type, you can configure the obfuscation parameters (Jc, Jmin, Jmax, S1, S2, H1–H4). If you leave them blank, sensible defaults are used.
+
+Clients connecting to an AmneziaWG server must use the **AmneziaVPN** app, not the standard WireGuard client.
+
+---
+
+## Discover Server
+
+If WireGuard is already configured on a remote server (e.g. an existing installation), use **Discover** to import its configuration:
+
+1. Go to **Servers → Discover**
+2. Enter SSH credentials for the remote server
+3. The system reads the existing WireGuard config, imports server keys, address pool, and existing peers
+
+Discovered clients are imported into the database. Existing WireGuard configuration is not changed.
+
+---
+
+## Manual agent installation
+
+Use the instructions bundled with the licensed agent package; they match the
+package and panel versions. Generate a unique key for each remote node, restrict
+network access to the control server, and never publish the key in an issue or
+paste it into logs shared with support.
+
+---
+
+## Verify Agent Status
+
+In the admin panel, go to **Servers** and check the status badge:
+
+- **Online** — agent is reachable and WireGuard is running
+- **Offline** — agent is not responding
+- **Drifted** — DB state does not match the live WireGuard interface (see below)
+
+You can also check manually from the main server:
+
+```bash
+curl -H "X-Api-Key: your-key" http://remote-ip:8001/health
+```
+
+Expected response:
+
+```json
+{"status": "ok", "interface": "wg0", "peers": 12}
+```
+
+On the remote server:
+
+```bash
+systemctl status vpnmanager-agent
+journalctl -u vpnmanager-agent -n 50 --no-pager
+```
+
+---
+
+## Drift Detection
+
+Flirexa periodically compares the database state (what peers *should* be on the interface) against the live WireGuard interface (what peers *are* actually configured). This runs every 5 minutes.
+
+**Safe drift** — a peer is in the database but missing from the live interface. This happens after a reboot or manual `wg` command. The system automatically re-adds the peer using `wg set`.
+
+**Unsafe drift** — the WireGuard interface is down, the agent is unreachable, or there is a configuration mismatch. The server is flagged as **🟠 DRIFTED** in the Server Monitoring view.
+
+To manually trigger reconciliation:
+
+- Click the **🔧** button next to a drifted server in **Server Monitoring**
+- Or use the API: `POST /api/v1/servers/{id}/reconcile`
+
+---
+
+## Multi-Server Tips
+
+- Add servers in different geographic regions to offer location selection to clients
+- Each server is independent — clients are assigned to one server per config
+- The background worker monitors traffic and subscriptions across all servers
+- Health monitoring runs in parallel across all servers every 60 seconds
+
+========================================================================================
+FILE: api.md
+========================================================================================
+# API Reference
+
+_Last verified: 2026-08-13. Example identifiers, versions, addresses, and tokens
+below are illustrative._
+
+The admin panel exposes a REST API at `http://YOUR_SERVER:10086/api/v1/`. All endpoints (except auth and a few public ones) require a Bearer token in the `Authorization` header.
+
+Interactive API documentation is available at:
+```
+http://YOUR_SERVER:10086/api/docs
+```
+
+---
+
+## Authentication
+
+### Get a Token
+
+```bash
+POST /api/v1/auth/login
+Content-Type: application/json
+
+{"username": "admin", "password": "your-password"}
+```
+
+Response:
+
+```json
+{
+  "access_token": "eyJ...",
+  "token_type": "bearer",
+  "expires_in": 86400
+}
+```
+
+Use the token in all subsequent requests:
+
+```bash
+curl -H "Authorization: Bearer eyJ..." http://localhost:10086/api/v1/servers
+```
+
+Brute-force protection is active: after 5 failed attempts, the account is locked for 5 minutes.
+
+---
+
+## Servers
+
+### List Servers
+
+```bash
+GET /api/v1/servers
+```
+
+### Get Server
+
+```bash
+GET /api/v1/servers/{id}
+```
+
+### Add Server
+
+```bash
+POST /api/v1/servers
+Content-Type: application/json
+
+{
+  "name": "Amsterdam",
+  "endpoint": "203.0.113.10:51820",
+  "interface": "wg0",
+  "server_type": "wireguard",
+  "address_pool_ipv4": "10.66.66.0/24",
+  "ssh_host": "203.0.113.10",
+  "ssh_user": "root",
+  "ssh_password": "secret"
+}
+```
+
+### Install Agent
+
+```bash
+POST /api/v1/servers/{id}/install-agent
+Content-Type: application/json
+
+{"port": 8001}
+```
+
+### Reconcile Drift
+
+Trigger drift detection and auto-reconciliation for a single server:
+
+```bash
+POST /api/v1/servers/{id}/reconcile
+```
+
+Response:
+
+```json
+{
+  "server_id": 1,
+  "server_name": "Amsterdam",
+  "drift_detected": false,
+  "issues": [],
+  "reconciled": ["alice-laptop (PK1a2b3c...)"]
+}
+```
+
+### Delete Server
+
+```bash
+DELETE /api/v1/servers/{id}
+```
+
+Add `?force=true` to remove even if the server is offline.
+
+---
+
+## Clients
+
+### List Clients
+
+```bash
+GET /api/v1/clients
+```
+
+Query parameters:
+- `server_id` — filter by server
+- `status` — filter by status (`active`, `disabled`, `expired`)
+- `search` — search by name
+
+### Get Client
+
+```bash
+GET /api/v1/clients/{id}
+```
+
+### Create Client
+
+```bash
+POST /api/v1/clients
+Content-Type: application/json
+
+{
+  "name": "alice-laptop",
+  "server_id": 1,
+  "expiry_date": "2026-12-31T00:00:00Z",
+  "traffic_limit_mb": 51200,
+  "bandwidth_limit": 50
+}
+```
+
+### Download Client Config
+
+```bash
+GET /api/v1/clients/{id}/config
+```
+
+Returns the WireGuard `.conf` file as plain text.
+
+### Enable / Disable Client
+
+```bash
+POST /api/v1/clients/{id}/enable
+POST /api/v1/clients/{id}/disable
+```
+
+### Delete Client
+
+```bash
+DELETE /api/v1/clients/{id}
+```
+
+---
+
+## Health Monitoring
+
+### Service Liveness
+
+```bash
+GET /health
+```
+
+This public endpoint is intentionally small and unauthenticated. It is used by
+service supervisors and update smoke checks. The authenticated admin page is
+served at `/system-health`; detailed health data stays under
+`/api/v1/health/*`.
+
+### System Health
+
+```bash
+GET /api/v1/health/system
+GET /api/v1/health/system?full=true   # includes external pings
+POST /api/v1/health/system/refresh    # force refresh
+```
+
+### All Servers Health
+
+```bash
+GET /api/v1/health/servers
+GET /api/v1/health/servers?full=true  # includes wg stats + system metrics
+```
+
+Response includes a `drift` field per server:
+
+```json
+{
+  "servers": [
+    {
+      "server_id": 1,
+      "server_name": "Amsterdam",
+      "status": "healthy",
+      "drift": {
+        "detected": false,
+        "details": null,
+        "detected_at": null,
+        "last_reconcile_at": "2026-03-15T10:00:00Z"
+      }
+    }
+  ]
+}
+```
+
+### Single Server Health
+
+```bash
+GET /api/v1/health/servers/{id}
+POST /api/v1/health/servers/{id}/refresh
+GET /api/v1/health/servers/{id}/history
+```
+
+---
+
+## Updates
+
+### Check Status
+
+```bash
+GET /api/v1/updates/status
+```
+
+Response:
+
+```json
+{
+  "current_version": "2.2.52",
+  "channel": "stable",
+  "available_update": {
+    "version": "2.3.0",
+    "update_type": "minor",
+    "changelog": "...",
+    "has_db_migrations": true
+  },
+  "update_in_progress": false
+}
+```
+
+### Apply Update
+
+```bash
+POST /api/v1/updates/apply
+Content-Type: application/json
+
+{"version": "2.3.0"}
+```
+
+### Check Progress
+
+```bash
+GET /api/v1/updates/progress/{update_id}
+```
+
+### Rollback
+
+```bash
+POST /api/v1/updates/rollback/{update_id}
+```
+
+### History
+
+```bash
+GET /api/v1/updates/history
+```
+
+### Change Channel
+
+```bash
+POST /api/v1/updates/channel
+Content-Type: application/json
+
+{"channel": "stable"}
+```
+
+---
+
+## System
+
+### Get Status
+
+```bash
+GET /api/v1/system/status
+```
+
+### Get Configuration
+
+```bash
+GET /api/v1/system/config
+```
+
+### Update Configuration
+
+```bash
+PATCH /api/v1/system/config
+Content-Type: application/json
+
+{"key": "backup_enabled", "value": "true"}
+```
+
+---
+
+## Backup
+
+### Create Backup
+
+```bash
+POST /api/v1/backup/create
+```
+
+### Download Backup
+
+```bash
+GET /api/v1/backup/download
+```
+
+Returns a `.tar.gz` archive.
+
+### List Backups
+
+```bash
+GET /api/v1/backup/list
+```
+
+---
+
+## Tariffs and Subscriptions
+
+### List Plans
+
+```bash
+GET /api/v1/tariffs
+```
+
+### Create Plan
+
+```bash
+POST /api/v1/tariffs
+Content-Type: application/json
+
+{
+  "name": "Basic",
+  "price_month": 9.99,
+  "traffic_limit_gb": 100,
+  "duration_days": 30,
+  "max_devices": 3
+}
+```
+
+---
+
+## Portal Users
+
+### List Users
+
+```bash
+GET /api/v1/portal-users
+```
+
+### Get User
+
+```bash
+GET /api/v1/portal-users/{id}
+```
+
+### Manage Subscription
+
+```bash
+POST /api/v1/portal-users/{id}/subscription
+Content-Type: application/json
+
+{
+  "action": "extend",
+  "days": 30,
+  "tier": "pro"
+}
+```
+
+---
+
+## Additional Endpoint Groups
+
+Beyond the groups documented above, the API exposes several more domains. These are
+fully described in the interactive Swagger UI at `/api/docs`; some belong to paid
+plugins and only respond when the corresponding license feature is active (otherwise
+they return **403** with an upgrade hint).
+
+| Group | Base path | Purpose |
+|-------|-----------|---------|
+| Payments | `/api/v1/payments` | Payment provider config, invoices, webhooks |
+| Traffic rules | `/api/v1/traffic` | Traffic rules and bandwidth policies (paid) |
+| Promo codes | `/api/v1/promo-codes` | Discount / promo code management (paid) |
+| Corporate | `/api/v1/corporate` | Site-to-site corporate VPN (Enterprise) |
+| Bots | `/api/v1/bots` | Telegram bot configuration and control |
+| Segments | `/api/v1/segments` | Client segmentation and grouping |
+
+For the complete, always-current endpoint surface — including request/response
+schemas and every route above — use the interactive docs at `/api/docs`.
+
+---
+
+## Error Format
+
+All errors return JSON:
+
+```json
+{
+  "detail": "Human-readable error message"
+}
+```
+
+| HTTP Status | Meaning |
+|-------------|---------|
+| 400 | Bad request — invalid parameters |
+| 401 | Not authenticated — missing or invalid token |
+| 403 | Forbidden — license tier insufficient |
+| 404 | Not found |
+| 409 | Conflict — e.g. another update is in progress |
+| 422 | Validation error — request body schema mismatch |
+| 500 | Internal error — check API logs |
+
+---
+
+## Rate Limiting
+
+Login endpoint: 5 attempts per 5-minute window per IP.
+
+There are no rate limits on other endpoints currently. In high-traffic deployments, put a reverse proxy (nginx) in front of the API.
+
+---
+
+## Complete API Documentation
+
+The interactive Swagger UI at `/api/docs` documents every endpoint with request/response schemas, example values, and the ability to try requests directly in the browser.
+
+ReDoc format is available at `/api/redoc`.
+
+========================================================================================
+FILE: architecture.md
+========================================================================================
+# Architecture
+
+_Last verified: 2026-08-13._
+
+---
+
+## Overview
+
+Flirexa is a multi-process Python application deployed on one or more Linux servers.
+
+```
+                     Internet
+                        |
+               [Firewall / NAT]
+                        |
+          +-------------+-------------+
+          |             |             |
+    :10086 (HTTP)  :10090 (HTTP)  :51820 (UDP)
+    Admin Panel    Client Portal   WireGuard
+          |             |             |
+     [FastAPI]     [FastAPI]     [wg0/awg0]
+          |             |
+          +------+------+
+                 |
+           [PostgreSQL]
+                 |
+      [Background Worker]
+
+
+     Remote Server 1          Remote Server N
+     ┌───────────────┐        ┌───────────────┐
+     │ FastAPI Agent │  ...   │ FastAPI Agent │
+     │ :8001         │        │ :8001         │
+     │ wg0 / awg0    │        │ wg0 / awg0    │
+     └───────────────┘        └───────────────┘
+```
+
+---
+
+## Components
+
+### API Server (`vpnmanager-api`)
+
+The main FastAPI application. Handles:
+- Admin panel HTTP requests
+- All `/api/v1/*` endpoints
+- JWT authentication for admin users
+- License validation middleware
+- WireGuard operations for the local server
+- Coordination of remote agent calls
+- Background monitoring loop (when `WORKER_ENABLED=false`)
+
+**Port:** 10086 (configurable via `API_PORT`)
+**Process:** Uvicorn, 1 worker
+**Tech:** Python 3.10+, FastAPI, SQLAlchemy, Alembic
+
+---
+
+### Admin Frontend
+
+The authenticated Vue 3 application is served by the API process. Desktop and
+mobile use the same routes and API contracts, but phone/tablet breakpoints use
+compact summaries, expandable detail, bottom sheets, and touch-sized actions
+instead of squeezing desktop tables into the viewport.
+
+The System Health page is `/system-health`. The separate unauthenticated
+`GET /health` endpoint remains reserved for service liveness and update smoke
+checks; UI routes must not reuse it.
+
+---
+
+### Client Portal (`vpnmanager-client-portal`)
+
+A separate FastAPI process serving the client self-service portal.
+
+Handles:
+- Client user registration and login
+- Subscription purchase and management
+- VPN config download
+- Payment-provider checkout and webhook processing
+
+Browser login uses short-lived HttpOnly access cookies, rotating hash-only
+refresh families, and CSRF protection. Released mobile clients retain their
+separate Bearer-token contract.
+
+Communicates with the main API internally via `SERVICE_API_TOKEN`.
+
+**Port:** 10090 (configurable via `CLIENT_PORTAL_PORT`)
+
+---
+
+### Background Worker (`vpnmanager-worker`)
+
+A long-running Python process that handles time-based and event-based background work:
+
+- Subscription expiry checks
+- Traffic limit enforcement
+- Subscription expiry and manual-renewal state (automatic renewal remains
+  fail-closed until it is settlement-backed)
+- Scheduled backup creation
+- Payment expiry cleanup
+- Drift detection and reconciliation (every 5 minutes)
+
+Running the worker as a separate service is recommended for production. If `WORKER_ENABLED=false`, the API process handles these tasks internally.
+
+---
+
+### Admin Bot (`vpnmanager-admin-bot`)
+
+A Telegram bot for administrators. Reads and writes the same database as the API.
+
+- Client management via Telegram commands
+- Server status and alerts
+- Traffic and subscription notifications
+
+---
+
+### Client Bot (`vpnmanager-client-bot`)
+
+A Telegram bot for end users. Provides:
+- Self-registration
+- VPN config download and QR code
+- Traffic usage and subscription status
+
+---
+
+### Remote Agent (`vpnmanager-agent`)
+
+Runs on each remote VPN node. This is a separately delivered Business+ component,
+not an implementation contained in the public stub files. It:
+- Executes `wg` / `awg` / `tc` / `ip` commands locally
+- Exposes a REST API for peer management
+- Runs in an isolated venv at `/opt/vpnmanager-agent/`
+
+The main server communicates with agents over HTTP using per-server API keys.
+
+---
+
+## Database
+
+PostgreSQL 15+. All state is stored in the database, including:
+- Server and client records
+- WireGuard public/private keys (encrypted at rest via SQLAlchemy column encryption)
+- Subscription and payment records
+- Update history
+- Admin users and session data
+- Health monitoring state
+- Audit logs
+
+**Key tables:**
+
+| Table | Description |
+|-------|-------------|
+| `servers` | WireGuard server records, SSH/agent credentials, drift state |
+| `clients` | VPN peer records, keys, IPs, traffic counters |
+| `client_users` | Portal user accounts |
+| `subscriptions` | Active and historical subscription records |
+| `payments` | Payment records per invoice |
+| `update_history` | All update and rollback operations |
+| `system_config` | Key/value store for admin panel settings |
+| `audit_logs` | Admin action audit trail |
+
+Migrations are managed with Alembic and applied by the installer/updater. In the
+Docker Compose stack, only the API container applies them at startup.
+
+---
+
+## Request Flow: Adding a Client
+
+```
+Admin → POST /api/v1/clients
+           │
+           ▼
+     auth middleware (JWT)
+           │
+           ▼
+     license middleware (tier check)
+           │
+           ▼
+     clients.py route handler
+           │
+           ├── assign IP from address pool
+           ├── generate key pair
+           ├── write to DB
+           │
+           ▼
+     ServerManager._get_wg(server)
+           │
+           ├── agent mode → AgentClient.peer_create(pubkey, allowed_ips)
+           │                    └── POST http://remote:8001/peer/create
+           │
+           └── ssh mode → WireGuardManager.add_peer(pubkey, allowed_ips)
+                              └── ssh → wg set wg0 peer ...
+```
+
+---
+
+## Request Flow: Drift Detection
+
+Every 5 minutes the worker (or API background loop) runs `run_reconciliation()`:
+
+```
+for each ONLINE server:
+    │
+    ├── get live peers from interface (via agent or SSH)
+    │       └── wg show dump → list of public keys
+    │
+    ├── get expected peers from DB
+    │       └── SELECT * FROM clients WHERE server_id=X AND enabled=true
+    │
+    ├── compare sets
+    │
+    ├── missing from live (safe drift):
+    │       └── wg set {iface} peer {pubkey} allowed-ips {ip}
+    │
+    └── interface down / agent unreachable (unsafe drift):
+            └── server.drift_detected = True
+                server.drift_details = {issues: [...]}
+```
+
+---
+
+## Update System
+
+```
+Admin panel → POST /api/v1/updates/apply
+                    │
+                    ▼
+              validation (version, disk, lock)
+                    │
+                    ▼
+              download package → verify SHA-256
+                    │
+                    ▼
+              create backup (code + DB dump)
+                    │
+                    ▼
+              update_apply.sh
+                  S0: disk preflight
+                  S3: backup (code tar + pg_dump)
+                  S4: stop services
+                  S5: extract package
+                  S6: pip install -r requirements.txt
+                  S7: alembic upgrade head
+                  S8: start services
+                  S9: smoke check (GET /health)
+                  S10: verify VERSION
+                    │
+              smoke check passes → success
+              smoke check fails  → rollback from backup
+```
+
+---
+
+## Security Model
+
+**Authentication:**
+- Admin panel: JWT Bearer tokens (HS256, configurable expiry)
+- Browser client portal: short-lived HttpOnly access cookie, rotating hash-only
+  refresh family, and CSRF protection; released mobile clients retain Bearer
+- Agent API: per-server API key in `X-Api-Key` header
+
+**Encryption at rest:**
+- WireGuard private keys encrypted in the database
+- SSH passwords encrypted in the database
+- Agent API keys encrypted in the database
+- Encryption key derived from `VMS_ENCRYPTION_KEY` env var or `/etc/machine-id`
+
+**License protection:**
+- RSA-PSS signed license keys
+- Subscription validation with a normally 72-hour signed-cache tolerance
+- Lifetime validation with a bound signed offline lease of at most 30 days
+- License server URL signed separately — cannot be tampered with in a distributed package
+
+**Update integrity:**
+- Manifest signed with RSA-PSS-SHA256
+- Package URL and expected SHA-256 are bound by that signed manifest
+- Download host is restricted and the package checksum is verified before apply
+
+---
+
+## Technology Stack
+
+| Layer | Technology |
+|-------|-----------|
+| API framework | FastAPI |
+| ORM | SQLAlchemy 2.x |
+| Migrations | Alembic |
+| Database | PostgreSQL 15+ |
+| Frontend | Vue 3 + Vite + Bootstrap 5 |
+| HTTP client | httpx |
+| SSH | Paramiko |
+| Telegram | python-telegram-bot |
+| Process manager | systemd |
+| VPN / proxy | WireGuard, AmneziaWG, Hysteria2, TUIC, VLESS-Reality (tier-dependent) |
+| Traffic shaping | `tc` (Linux traffic control) |
+
+========================================================================================
+FILE: backup-restore.md
+========================================================================================
+# Backup and Restore
+
+_Last verified: 2026-08-13._
+
+---
+
+## Built-in Backup System
+
+Manual full/database backups and restores are available on FREE. Scheduled
+backups, retention settings, and managed network storage require the Business+
+`auto-backup` feature.
+
+You can also run backups and restores from the CLI: `vpnmanager backup --full` (or `--db-only`) and `vpnmanager restore --archive <path> --yes`. See [cli.md](cli.md).
+
+### Configure Scheduled Backups
+
+1. Go to **Settings → Backups** in the admin panel
+2. Set:
+   - **Enabled** — toggle backups on or off
+   - **Interval** — how often to run (e.g. every 24 hours)
+   - **Time (UTC)** — hour of day to run the backup
+   - **Retention** — how many backups to keep (older ones are deleted automatically)
+   - **Storage type** — local directory or mounted network share
+
+Each backup includes:
+- Full PostgreSQL database dump
+- WireGuard configuration files from `/etc/wireguard/` and `/etc/amneziawg/`
+- The `.env` file
+
+### Storage Options
+
+**Local storage** (default): backups are written to `{install_dir}/backups/` or a custom path.
+
+**Network share** (SMB/NFS): mount a network share and point the backup system at the mount point. The system writes the same backup files there.
+
+---
+
+## Manual backup
+
+Use the product CLI so metadata and checksums are included:
+
+```bash
+sudo vpnmanager backup --full --output /var/backups/flirexa
+sudo vpnmanager backup --db-only --output /var/backups/flirexa
+```
+
+A current full archive is named `vpnmanager-backup-<backup_id>.tar.gz` and uses
+the `tar.gz/v2` format. It includes a compressed PostgreSQL dump, `.env`, local
+WireGuard/AmneziaWG configuration, per-server exports, product version, metadata,
+and checksums. Store a copy off the application host.
+
+Archive creation is serialized across the admin API, scheduler, CLI, and
+worker. If one backup is already running, another request receives a clear busy
+response instead of starting a second dump or racing retention. The mobile
+admin view also keeps the create action disabled with visible progress while
+the request is running.
+
+On phones and tablets, Archives, Schedule, and Storage are separate compact
+views. Archive rows keep date, size, type, and verification state readable;
+verify, restore, database-only restore, and delete actions open in a focused
+bottom sheet rather than a horizontally compressed desktop table.
+
+## Restore
+
+Restore is destructive. Confirm that you have the intended archive and a separate
+copy before running:
+
+```bash
+sudo vpnmanager restore \
+  --archive /var/backups/flirexa/vpnmanager-backup-<backup_id>.tar.gz \
+  --yes
+```
+
+The restore command verifies the archive, restores the database, `.env`, and local
+VPN configuration, restarts product services, and evaluates health. It does not
+restore TLS certificates, custom reverse-proxy configuration, remote agent
+installations, or out-of-band system customizations.
+
+---
+
+## Rollback via Update History
+
+If a recent **update** caused problems, the update system maintains its own pre-update backup (code + database dump) stored at:
+
+```
+{install_dir}/backups/update_backups/pre_{version}_{timestamp}/
+```
+
+To restore from an update backup:
+
+**Via the admin panel:**
+1. Go to **Updates → History**
+2. Find the update record with a backup available (green badge)
+3. Click **Rollback**
+
+**Via the command line:**
+
+```bash
+cd /opt/vpnmanager
+sudo bash update.sh --rollback
+```
+
+This restores both the code and the database from the most recent update backup, then restarts all services and runs a smoke check.
+
+---
+
+## Backup via the Admin Panel API
+
+You can trigger a backup on demand via the API:
+
+```bash
+# Trigger backup
+curl -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  http://localhost:10086/api/v1/backup/create
+
+# List and verify archives already stored on the server
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:10086/api/v1/backup/list
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  http://localhost:10086/api/v1/backup/verify/BACKUP_ID
+```
+
+---
+
+## What Is Not Backed Up
+
+- Python virtual environment (`venv/`) — recreated from `requirements.txt` on restore
+- Frontend build artifacts (`src/web/static/dist/`) — rebuilt during install/update
+- Agent installations on remote servers — the agent is reinstalled automatically when needed
+
+Remote server WireGuard configs are stored in the database and can be re-pushed to remote agents at any time.
+
+---
+
+## Disaster Recovery Checklist
+
+If the server is lost and you need to rebuild from scratch:
+
+1. Provision a new server with the same OS
+2. Install the same supported Flirexa product generation
+3. Copy the full backup archive to the new host
+4. Run `sudo vpnmanager restore --archive <archive> --yes`
+5. Re-provision TLS/reverse-proxy configuration and any remote agents
+6. Verify `/health`, the admin panel, VPN interfaces, and a test client
+
+For remote servers: the agent will be reinstalled automatically when you next click **Install Agent** in the admin panel. The database already contains all peer configurations.
+
+========================================================================================
+FILE: cli-contract.md
+========================================================================================
+# CLI Contract
+
+_Last verified: 2026-07-24._
+
+This document freezes the public operational contract of `vpnmanager` for the commercial line. The baseline began in `1.3.0` and remains in force for the current `2.x` line.
+
+## Scope
+
+This contract applies to:
+- `vpnmanager status`
+- `vpnmanager health`
+- `vpnmanager maintenance on/off`
+- `vpnmanager license status`
+- `vpnmanager services status`
+- `vpnmanager services restart`
+- `vpnmanager support-bundle`
+- `vpnmanager backup`
+- `vpnmanager restore`
+
+The command names, destructive semantics, and JSON field families in this document must not be broken within the active commercial line without an explicit bugfix reason and release note.
+
+## General Rules
+
+- Supported operational usage is `sudo vpnmanager ...` or root.
+- Non-root invocation must fail cleanly without traceback if required product config is unreadable.
+- `--json` is the supported automation mode.
+- Destructive commands require explicit confirmation via `--yes` or interactive confirmation.
+- Recovery commands remain allowed in `license_expired_readonly`.
+
+## Command Table
+
+| Command | Type | Success Exit Code | Failure Exit Code | AuditLog | Notes |
+|---|---|---:|---:|---|---|
+| `vpnmanager status` | read-only | 0 | 1 | no | overall system state |
+| `vpnmanager health` | read-only | 0 for `ok`/`degraded`, 1 for `failed` | 1 | no | health verdict command |
+| `vpnmanager maintenance on --reason ...` | mutating | 0 | 1 | yes | explicit maintenance mode |
+| `vpnmanager maintenance off` | mutating | 0 | 1 | yes | exits maintenance mode |
+| `vpnmanager license status` | read-only | 0 | 1 only on command failure | no | readonly license state is not command failure |
+| `vpnmanager services status` | read-only | 0 | 1 | no | service health view |
+| `vpnmanager services restart --api` | mutating | 0 | 1 | yes | partial service restart |
+| `vpnmanager services restart --all --yes` | mutating/destructive | 0 | 1 | yes | full managed service restart |
+| `vpnmanager support-bundle ...` | read-only | 0 | 1 | no | diagnostic archive |
+| `vpnmanager backup --full ...` | non-destructive operational write | 0 | 1 | yes | strict backup |
+| `vpnmanager backup --db-only ...` | non-destructive operational write | 0 | 1 | yes | strict DB-only backup |
+| `vpnmanager restore --archive ... --yes` | destructive | 0 | 1 | yes | strict restore |
+
+## JSON Contract Rules
+
+### Stable Rules
+
+For the active commercial line (`2.x` at the time of writing):
+- commands supporting `--json` must keep returning valid JSON
+- top-level success/failure semantics must not invert
+- command names and major field groups must remain stable
+- additive fields are allowed
+- silent removal or rename of established top-level fields is not allowed
+
+### Command Families
+
+`status` / `health` / `license status` / `services status` return the system status model, including these top-level fields:
+- `collected_at`
+- `result`
+- `version`
+- `mode`
+- `maintenance_reason`
+- `layout_mode`
+- `install_root`
+- `current_release`
+- `services`
+- `license`
+- `update`
+- `backup`
+- `health`
+- `disk`
+- `uptime`
+- `db`
+- `degraded_reasons`
+- `failed_reasons`
+
+`maintenance on/off` returns:
+- `success`
+- `action`
+- `mode`
+- `reason`
+
+`services restart` returns:
+- `success`
+- `action`
+- `requested_scope`
+- `restarted_units`
+- `version`
+- `mode`
+- `health_summary`
+- `warnings`
+- `error`
+
+`support-bundle` returns:
+- `success`
+- `archive_path`
+- `bundle_size_bytes`
+- `sections_included`
+- `sections_failed`
+- `manifest_path`
+
+`backup` returns:
+- `success`
+- `action`
+- `backup_type`
+- `archive_path`
+- `size_bytes`
+- `version`
+- `mode`
+- `included_sections`
+- `warnings`
+- `error`
+
+`restore` returns:
+- `success`
+- `action`
+- `archive_path`
+- `backup_id`
+- `version`
+- `mode`
+- `restored_sections`
+- `warnings`
+- `error`
+- `maintenance_reason`
+- `health_summary`
+- `log_hint`
+
+## Success / Failed / Warning Semantics
+
+### `status`
+- success: command returns system summary
+- failure: collector cannot produce a valid result
+- warning/degraded: represented in `result=degraded` and reason arrays
+
+### `health`
+- success: `result=ok`
+- warning: `result=degraded`
+- failure: `result=failed`
+
+### `license status`
+- success: command executes and returns current license state
+- warning: readonly or grace is represented in data, not exit code
+- failure: only command execution failure
+
+### `services restart`
+- success: requested restart completed
+- warning: command may return success with warnings if a component needs short stabilization
+- failure: blocked or restart failed
+
+### `backup`
+- success: complete backup archive created
+- warning: online snapshot warnings may be present while success remains true
+- failure: any required backup section failed
+
+### `restore`
+- success: restore completed and post-restore verification passed under the command policy
+- warning: degraded but recoverable post-restore observations may be surfaced in `warnings`
+- failure: required restore step failed, verification failed, or confirmation missing
+
+## Allowed Modes
+
+| Command | normal | degraded | maintenance | update_in_progress | rollback_in_progress | license_expired_readonly |
+|---|---|---|---|---|---|---|
+| `status` | yes | yes | yes | yes | yes | yes |
+| `health` | yes | yes | yes | yes | yes | yes |
+| `license status` | yes | yes | yes | yes | yes | yes |
+| `services status` | yes | yes | yes | yes | yes | yes |
+| `services restart` | yes | yes | policy-limited | no | no | yes |
+| `support-bundle` | yes | yes | yes | yes | yes | yes |
+| `backup` | yes | yes | yes | no | no | yes |
+| `restore` | yes | yes | auto-maintenance | no | no | yes |
+| `maintenance on/off` | yes | yes | yes | policy-limited | policy-limited | yes |
+
+## Freeze Rule
+
+Within the active commercial line:
+- do not break command names
+- do not break destructive confirmation rules
+- do not break top-level JSON shape
+- do not change exit code meaning casually
+
+Only real bugfixes justify contract changes, and they must be documented in release notes.
+
+========================================================================================
+FILE: cli.md
+========================================================================================
+# CLI Reference
+
+_Last verified: 2026-07-24._
+
+`vpnmanager` is the official local operational interface for the product.
+
+Supported operational usage:
+- run as `root`
+- or run via `sudo vpnmanager ...`
+
+If a non-root user cannot read the product config, `vpnmanager` must fail cleanly and tell the operator to rerun with `sudo`.
+
+## Public Commands
+
+- `vpnmanager status`
+- `vpnmanager health`
+- `vpnmanager maintenance on --reason ...`
+- `vpnmanager maintenance off`
+- `vpnmanager license status`
+- `vpnmanager services status`
+- `vpnmanager services restart --api`
+- `vpnmanager services restart --all --yes`
+- `vpnmanager support-bundle --output <path> --redact-strict`
+- `vpnmanager backup --full --output <path>`
+- `vpnmanager backup --db-only --output <path>`
+- `vpnmanager restore --archive <path> --yes`
+
+## General Rules
+
+- `--json` is the supported automation mode.
+- Destructive commands require confirmation or `--yes`.
+- Recovery commands remain usable in `license_expired_readonly`.
+- Command and JSON freeze rules are documented in [cli-contract.md](cli-contract.md).
+
+## Examples
+
+```bash
+sudo vpnmanager status
+sudo vpnmanager health --json
+sudo vpnmanager maintenance on --reason "planned maintenance"
+sudo vpnmanager services restart --api
+sudo vpnmanager support-bundle --output /tmp --redact-strict
+sudo vpnmanager backup --full --output /tmp
+sudo vpnmanager restore --archive /tmp/vpnmanager-backup-20260330-212008.tar.gz --yes
+```
+
+## Related Documents
+
+- [cli-contract.md](cli-contract.md)
+- [backup-restore.md](backup-restore.md)
+- [disaster-recovery.md](disaster-recovery.md)
+- [known-issues.md](known-issues.md)
+
+========================================================================================
+FILE: client-management.md
+========================================================================================
+# Client Management
+
+_Last verified: 2026-07-24._
+
+In the admin data model, a **client** is a protocol credential/peer attached to
+one server. A portal **device slot** can coordinate matching peers across several
+customer-visible WireGuard/AmneziaWG servers. Proxy clients use protocol URIs
+instead of WireGuard IP/key pairs.
+
+---
+
+## Creating a Client
+
+1. Go to **Clients → Add Client**
+2. Fill in:
+   - **Name** — a label to identify the client (e.g. `alice-laptop`)
+   - **Server** — which WireGuard server to assign the client to
+   - **Expiry date** (optional) — automatically disable the client after this date
+   - **Traffic limit** (optional) — disable the client after N MB of traffic
+   - **Bandwidth limit** (optional) — rate-limit to N Mbps via `tc`
+3. Click **Create**
+
+For WireGuard/AmneziaWG, the system automatically:
+- Assigns the next available IP from the server's address pool
+- Generates a WireGuard key pair
+- Adds the peer to the live WireGuard interface
+- Stores the configuration in the database
+
+---
+
+## Downloading Client Configuration
+
+After creating a client, use **Download Config** or **QR Code**. WireGuard and
+AmneziaWG produce their native configuration formats; Hysteria2, TUIC, and
+VLESS-Reality produce proxy URIs/subscriptions when the Starter+ protocol feature
+is active.
+
+### WireGuard App
+
+Use the official WireGuard client for most platforms:
+- **Android / iOS** — WireGuard app from the store
+- **Windows / macOS / Linux** — WireGuard client from [wireguard.com](https://www.wireguard.com/install/)
+
+Import the `.conf` file or scan the QR code.
+
+### AmneziaVPN App
+
+If the client is on an **AmneziaWG** server, the config includes obfuscation parameters (Jc, Jmin, Jmax, S1, S2, H1–H4). These parameters are ignored by the standard WireGuard client. Clients connecting to AmneziaWG servers must use the **AmneziaVPN** app:
+
+- Android: [Google Play](https://play.google.com/store/apps/details?id=org.amnezia.vpn) or direct APK
+- iOS: App Store
+- Windows / macOS / Linux: [amnezia.org](https://amnezia.org)
+
+Import the downloaded `.conf` file into AmneziaVPN.
+
+---
+
+## Managing Clients
+
+In the **Clients** list you can:
+
+- **Enable / Disable** — toggle the peer in the live WireGuard interface without deleting it
+- **Edit** — change the name, expiry, traffic limit, or bandwidth limit
+- **Regenerate Keys** — issue a new key pair (the old config stops working immediately)
+- **Delete** — remove from WireGuard and the database
+
+### Bulk Operations
+
+Select multiple clients with the checkboxes and use the bulk actions toolbar to enable, disable, or delete.
+
+---
+
+## Traffic Monitoring
+
+The **Clients** table shows:
+- **RX / TX** — cumulative bytes received and sent since last reset
+- **Last Handshake** — when the peer last connected
+- **Status** — active (connected recently), idle, disabled, or expired
+
+Traffic counters are updated every monitoring cycle (default: 60 seconds).
+
+To reset a client's traffic counter: open the client, click **Reset Traffic**.
+
+---
+
+## Expiry and Traffic Limits
+
+When a client reaches its expiry date or traffic limit, it is automatically disabled by the background worker. Disabled clients are removed from the live WireGuard interface — their configs stop working — but the record remains in the database.
+
+Re-enable a client manually or extend the expiry in the admin panel.
+
+---
+
+## Peer Visibility
+
+Peer visibility allows devices belonging to the same user (same Telegram user ID) to see each other in the VPN network. This is an AmneziaWG-specific feature.
+
+When enabled for a client:
+- The server's WireGuard config lists the IPs of sibling devices as allowed IPs for each peer
+- Devices can reach each other directly within the VPN subnet
+
+**Requirements:**
+- Server must be `amneziawg` type
+- Server must have `supports_peer_visibility` enabled (default: true)
+- Clients must have `peer_visibility` enabled
+
+Configure on the client edit screen.
+
+---
+
+## Client Portal Self-Service
+
+End users can manage their own VPN configs without admin involvement:
+
+1. Open **Client Portal** at `http://YOUR_SERVER_IP:10090`
+2. Register with the identifier/email policy configured by the operator
+3. Choose a subscription plan and pay
+4. Download VPN config or scan QR code
+5. View traffic usage
+
+The client portal is configured via **Settings → Subscriptions** in the admin panel. Plans define price, duration, traffic quota, and number of allowed devices.
+
+---
+
+## Telegram Client Bot
+
+The end-user Telegram bot is a Business+ capability. Users who prefer Telegram
+over the web portal can:
+
+1. Start a chat with your client bot
+2. The bot auto-registers them and creates a VPN client
+3. Reply with commands:
+   - View config
+   - Get QR code
+   - Check remaining traffic
+   - Submit a support message
+
+Set up the client bot token in **Settings → Bots** or in `.env` as `CLIENT_BOT_TOKEN`.
+
+---
+
+## Importing Existing Clients
+
+If you have an existing WireGuard setup with clients already configured, use **Servers → Discover** to import them. The system reads the live `wg show dump` output, parses existing peers, and imports them into the database.
+
+After discovery, each imported client is visible in the Clients list with its existing IP and public key.
+
+========================================================================================
+FILE: disaster-recovery.md
+========================================================================================
+# Disaster Recovery Runbook
+
+_Last verified: 2026-07-24._
+
+This is the supported administrator runbook for restoring the product without developer intervention.
+
+Supported flow:
+
+```text
+old server -> full backup -> new server -> install -> restore -> verify
+```
+
+## Scope
+
+This runbook applies to the supported commercial baseline:
+- single-node self-hosted deployment
+- Ubuntu Server 24.04 LTS or 22.04 LTS
+- product-managed PostgreSQL
+- product-managed systemd services
+
+## What Restore Restores
+
+Current supported restore scope:
+- PostgreSQL application database
+- `.env`
+- local WireGuard / AmneziaWG config files included in backup
+- product service restart
+- post-restore health verification
+
+Also restored indirectly through database content:
+- servers
+- clients
+- update history stored in DB
+- most product configuration stored in DB
+
+## What Restore Does Not Guarantee Automatically
+
+Not guaranteed automatically by current restore:
+- SSL certificates reissue/reconfiguration
+- external reverse proxy customizations
+- arbitrary manual systemd unit edits
+- arbitrary manual cron jobs
+- manual out-of-band customizations outside product-managed files
+
+## Prerequisites
+
+Before disaster recovery, prepare:
+- latest full backup archive
+- root access to the new server
+- DNS / domain access if public URLs are used
+- saved license key / activation data
+
+Important:
+- keep the original backup archive name intact
+- restore expects archive name format:
+  - `vpnmanager-backup-<id>.tar.gz`
+
+## Step 1. Create Full Backup On Old Server
+
+Run on old server:
+
+```bash
+sudo vpnmanager backup --full --output /root/dr
+```
+
+Expected result:
+- command returns `RESULT: SUCCESS`
+- a full backup archive is created
+
+Recommended additional diagnostic artifact:
+
+```bash
+sudo vpnmanager support-bundle --output /root/dr --redact-strict
+```
+
+## Step 2. Copy Backup Off The Old Server
+
+Copy these to safe storage or directly to the new server:
+- the full backup archive
+- the support bundle (recommended)
+
+## Step 3. Prepare New Server
+
+Create a clean supported Ubuntu server.
+
+Verify:
+- root access available
+- enough disk space
+- required ports/firewall/DNS ready
+
+## Step 4. Install Product On New Server
+
+On the new server:
+
+Install a supported Flirexa generation using the official installer/package
+available to your licence:
+
+```bash
+curl -fsSL https://flirexa.biz/install.sh -o /tmp/flirexa-install.sh
+sudo bash /tmp/flirexa-install.sh --non-interactive
+```
+
+This prepares:
+- `/opt/vpnmanager`
+- `.env`
+- PostgreSQL
+- systemd units
+- `vpnmanager` CLI
+- base runtime layout
+
+## Step 5. Copy Backup To New Server
+
+Copy the original backup archive to the new server without renaming it.
+
+Example target path:
+- `/root/dr/vpnmanager-backup-<id>.tar.gz`
+
+## Step 6. Restore On New Server
+
+Run:
+
+```bash
+sudo vpnmanager restore --archive /root/dr/vpnmanager-backup-<id>.tar.gz --yes
+```
+
+Behavior:
+- maintenance mode is enabled automatically if needed
+- services are stopped
+- DB is restored
+- `.env` is restored
+- local WireGuard configs are restored
+- local PostgreSQL credentials are reconciled to restored `.env`
+- services are restarted
+- post-restore health is evaluated
+
+## Step 7. Verify Recovery
+
+Run:
+
+```bash
+sudo vpnmanager status
+sudo vpnmanager health
+sudo vpnmanager services status
+sudo vpnmanager license status
+```
+
+Expected result:
+- `status` is `SUCCESS`
+- `health` is not `FAILED`
+- API is healthy
+- DB is connected
+- Alembic matches head
+- required services are active
+
+## If Health Is Degraded
+
+If `vpnmanager health` returns `DEGRADED`:
+1. wait briefly and rerun health
+2. run:
+   - `sudo vpnmanager services status`
+   - `sudo vpnmanager support-bundle --output /root/dr --redact-strict`
+3. inspect known transient cases before escalating
+
+## If Restore Failed
+
+If restore returns `FAILED`:
+1. do not start manual DB surgery
+2. collect diagnostics:
+
+```bash
+sudo vpnmanager status
+sudo vpnmanager health
+sudo vpnmanager support-bundle --output /root/dr --redact-strict
+```
+
+3. inspect service logs if needed:
+
+```bash
+journalctl -u vpnmanager-api -u vpnmanager-client-portal -u vpnmanager-worker -n 100 --no-pager
+```
+
+4. send backup id, support bundle, and failure text to support
+
+## Logs And Diagnostics
+
+Useful sources:
+- `sudo vpnmanager status`
+- `sudo vpnmanager health`
+- `sudo vpnmanager support-bundle --output <path> --redact-strict`
+- `journalctl -u vpnmanager-api -u vpnmanager-client-portal -u vpnmanager-worker`
+
+## After IP / Domain Change
+
+If the new server has a different public IP or domain, verify:
+- admin URL
+- portal URL
+- firewall rules
+- customer-facing endpoints
+- any client configs embedding old endpoint
+
+If necessary:
+- regenerate affected client configs
+- reissue/reconfigure TLS externally
+
+## Support Escalation Package
+
+When contacting support, provide:
+1. backup archive id
+2. `sudo vpnmanager status`
+3. `sudo vpnmanager health`
+4. redacted support bundle archive
+5. brief symptom description
+
+Do not send the backup archive, `.env`, licence key, activation code, VPN
+configuration, or database dump unless support explicitly establishes a secure
+transfer and explains why it is required.
+
+========================================================================================
+FILE: free-vs-paid.md
+========================================================================================
+# FREE vs paid
+
+_Last verified: 2026-08-18. Current checkout pricing on [flirexa.biz](https://flirexa.biz) is authoritative._
+
+Honest, unhedged answer to "what do I get for free and what do I have to pay for?"
+
+If you're choosing between Flirexa and an alternative, this page is the comparison ammunition. If you're already running Flirexa and wondering whether to upgrade, this page tells you what unlocks at each tier.
+
+---
+
+## TL;DR
+
+**FREE** is a complete VPN service for one operator on one physical host with up to 80 clients. WireGuard + AmneziaWG, panel, client portal, crypto payments via NOWPayments, Telegram admin bot, manual backups. MIT-licensed, install once, run forever — no payment, no expiry.
+
+**Starter (from $12/mo)** adds Hysteria2/TUIC/VLESS-Reality protocols and promo codes.
+
+**Business (from $49/mo)** adds multi-server, traffic rules, scheduled backups,
+the full payment-provider suite, the full client Telegram bot, prepaid customer
+credit, and four per-device DNS protection modes.
+
+**Enterprise (from $149/mo)** adds site-to-site corporate VPN, all built-in
+appearance and white-label controls, multi-admin RBAC, the standard client-app
+package, custom DNS profiles, and enforced DNS policies.
+
+These plan descriptions apply to newly issued licences. An older paid key keeps
+any capability explicitly present in its signed feature set; updates do not
+silently remove a previously purchased flag.
+
+---
+
+## What's in FREE forever
+
+| | |
+|---|---|
+| **Protocols** | WireGuard, AmneziaWG |
+| **Clients** | up to 80 |
+| **Servers** | one physical host, up to 2 local endpoints (one WireGuard + one AmneziaWG) |
+| **Admin panel** | full Vue 3 SPA on port 10086 |
+| **Client portal** | full Vue 3 SPA on port 10090 with self-service signup, plans, payment, config download |
+| **Telegram admin bot** | full functionality |
+| **Telegram client bot** | not available (Business+ feature) |
+| **Crypto payments** | NOWPayments built-in (BTC, ETH, USDT, XMR, +50 more) |
+| **Other payment providers** | not in FREE — CryptoPay, PayLio, and additional card/local rails require a paid licence |
+| **Languages** | EN, RU, UK, DE, FR, ES |
+| **Manual backup / restore** | yes |
+| **Scheduled backups** | not available (Business+ feature) |
+| **Auto-updates** | yes, from the signed official update manifest |
+| **Licence heartbeat** | none — FREE runtime licences never expire and cannot be remotely disabled |
+| **Source code** | the public open core is MIT-licensed; explicitly documented commercial extensions are separate |
+
+### Limits in numbers
+
+- **80 clients per install**: enforced by the API, not just a soft suggestion. If you hit 80, you cannot add a 81st without upgrading or deleting an existing one.
+- **Up to 2 local endpoints**: one per protocol type — a single WireGuard endpoint and a single AmneziaWG endpoint on the install host. Remote nodes or another endpoint of the same protocol need the multi-server feature.
+- **WireGuard endpoint count**: a single WireGuard interface can host all 80 clients comfortably.
+
+---
+
+## Starter — from $12 / month
+
+For solo operators who started monetizing and outgrew the FREE protocol set or want acquisition tools.
+
+**Adds:**
+
+- **Hysteria2** support — QUIC-based proxy, censorship-resistant
+- **TUIC** support — alternative QUIC proxy, useful when Hysteria2 is fingerprinted
+- **VLESS-Reality** support — Xray-based HTTPS camouflage
+- **Promo codes** — percent-off, free-day extensions, tier-restricted, expiring
+- **Up to 500 clients** (vs 80 on FREE)
+
+Automatic end-customer subscription renewal is temporarily unavailable. The
+portal uses manual renewal until every added paid period can be tied to one
+newly verified provider settlement. Existing signed entitlements are preserved
+for a compatible replacement.
+
+Runs the enabled protocols on the install host. Remote-node orchestration starts at Business.
+
+---
+
+## Business — from $49 / month
+
+The headline-feature tier. This is what serious commercial operators actually pay for.
+
+**Adds:**
+
+- **Multi-server orchestration** — manage up to 10 servers from one panel. Push clients to specific servers, balance load, see per-server traffic. Remote VPN nodes run a tiny `vpnmanager-agent` HTTP service.
+- **Full client Telegram bot** — end users can register, browse plans, pay in crypto, download configs, all via Telegram. Many operators in censorship-heavy and crypto-native markets prefer this over the web portal.
+- **Traffic rules** — per-client and global throttling, automatic enforcement when a quota threshold is hit
+- **Scheduled backups** — daily automatic backups; mount remote storage (S3, FTP, NFS, SMB); retain N revisions
+- **Customer account balance** — customers can add prepaid USD credit through
+  a configured provider and use it for later subscription purchases; operator
+  adjustments require a reason and are audit-logged
+- **Per-device DNS protection** — configure no-filter, ads/trackers, malware,
+  and combined resolver modes, then optionally let each portal customer choose
+  a mode for every device
+- **Up to 2,000 clients** across up to 10 servers
+
+---
+
+## Enterprise — from $149 / month
+
+For ISPs, MSPs, and companies who don't run an end-user VPN service but need site-to-site connectivity.
+
+**Adds:**
+
+- **Corporate VPN (site-to-site)** — multi-site WireGuard mesh with subnet allocation, full-mesh routing, per-site config generation, network diagnostics. The use case is "branch-office connectivity": three offices in different cities, all employees on a private VPN, traffic routed peer-to-peer through Flirexa-managed config.
+- **Full white-label** — product/company names, logos, colours, footer, custom portal/admin domains, custom `From` identity, favicon, browser title, and customer Privacy/Terms links or hosted branded legal pages
+- **Manager RBAC** — additional admin accounts with permission scopes (clients-only, servers-only, support-only), audit log of who did what
+- **Advanced DNS policy** — create custom resolver profiles and enforce one by
+  subscription plan, customer segment, portal customer, or device
+- **Standard client apps** — Android, Windows, and Linux application package
+- **Unlimited clients and servers**
+
+---
+
+## How the gating works in practice
+
+The public repository contains the MIT open core plus marked compatibility
+stubs. Official customer packages supply protected commercial implementations;
+their runtime activation still depends on the signed licence feature set.
+
+**On a FREE install:**
+
+- `LICENSE_KEY` env var is empty.
+- `LicenseManager` returns FREE tier without a licence-server heartbeat.
+- Plugin loader scans `plugins/`, sees that none of the paid plugins' required features are granted, skips them all.
+- The Vue admin panel hides paid-feature UI (or shows it locked, depending on which screen).
+- API endpoints behind paid features return `403` with a clear upgrade hint.
+- FREE/trial may open the native support action from the current admin header;
+  no legacy reminder opens on a timer.
+
+**On a paid install:**
+
+- `LICENSE_KEY` is set in `.env`.
+- `LicenseManager` validates the RSA-signed key against the embedded public key. Subscription licences use bounded online enforcement. Lifetime is perpetual and periodically rotates a hardware-, instance-, and licence-bound signed offline lease valid for at most 30 days.
+- Plugin loader picks up the matching plugin manifests and mounts their routers.
+- Paid feature endpoints return real responses.
+- Purchased tiers render no Flirexa donation control or modal. Enterprise can
+  also remove project attribution through its white-label controls.
+- Commercial implementations such as extra protocols, multi-server orchestration, Corporate VPN, RBAC, paid automation, and third-party payment providers are not published in this MIT tree.
+- An update of an already licensed installation preserves `.env`, the database,
+  licence cache, signed server list, limits, and feature flags. It replaces the
+  implementation/runtime tree without reactivating or reissuing the licence.
+
+If your subscription expires or is cancelled, paid capabilities stop loading.
+Your local data remains on the installation and the FREE-tier capabilities keep
+working.
+
+---
+
+## What you can still do without paying
+
+A few things people sometimes ask about that are FREE forever:
+
+- ✅ **Run Flirexa for personal / family use** — never going to need a license
+- ✅ **Run Flirexa as a small commercial service** up to 80 clients, accepting crypto via NOWPayments
+- ✅ **Fork the public repository** and modify it for your own use (MIT license)
+- ✅ **Write community plugins** that extend Flirexa with new features unrelated to the paid plugins
+- ✅ **Embed Flirexa in your own product** as long as you preserve the MIT copyright notice
+- ✅ **Run without a paid licence heartbeat** — installer diagnostics can be disabled with `INSTALL_TELEMETRY=off`; update checks still use the signed official update service
+
+---
+
+## Honest trade-offs
+
+A few things to know up front:
+
+- **Lifetime is perpetual and outage-tolerant, not a reusable static unlock.**
+  It includes future standard product updates and a hardware-, instance-, and
+  licence-bound signed offline lease valid for up to 30 days after successful
+  validation. FREE installs remain independent of the licensing service.
+- **Commercial implementations are separately licensed.** The open core
+  exposes marked compatibility boundaries and feature interfaces. Official
+  customer releases protect the commercial backend; NOWPayments and the
+  documented FREE functionality remain in the MIT core.
+- **Billing periods vary.** Monthly, annual, and lifetime options can be offered by the current checkout. Consult [flirexa.biz](https://flirexa.biz) for the combinations available for each tier.
+
+---
+
+## Pricing FAQ
+
+**Why open-core instead of fully open / fully closed?**
+Fully open (like 3X-UI) means donations as the only revenue, which doesn't fund full-time development for serious commercial features. Fully closed has no community and no distribution. Open-core lets the FREE core thrive on community contributions while paid plugins fund maintenance.
+
+**Which price is current?**
+The website checkout is authoritative. This document records the feature model but may lag a price promotion or billing-period change.
+
+**Can I downgrade?**
+Yes. Cancel any time. At the end of the current billing period your install reverts to FREE — clients and servers stay where they are; you just lose access to the paid features. No data loss.
+
+**Do you offer non-profit / educational discounts?**
+Email `support@flirexa.biz` to ask about eligibility.
+
+**What happens to my data if I stop paying?**
+Your clients, VPN configurations, traffic, and payment records stay on your installation. Paid licence validation sends licence/activation identifiers, a derived hardware and instance identifier, product version, status/uptime metadata, and normal request metadata such as source IP; it does not upload your client list or VPN traffic. Cancelling does not delete local data.
+
+========================================================================================
+FILE: getting-started.md
+========================================================================================
+# Getting Started
+
+_Last verified: 2026-07-24._
+
+Flirexa is a self-hosted platform for managing WireGuard, AmneziaWG, and
+licence-gated proxy protocols. It provides a web admin panel, a client
+self-service portal, Telegram bots, and Business+ remote-node management.
+
+---
+
+## What Is Flirexa
+
+You install it on a Linux server. It takes over the WireGuard configuration on that server and any remote servers you add. You manage everything from a single web interface: add clients, issue configs, monitor traffic, apply bandwidth limits, and automate subscription billing.
+
+It is designed for:
+- VPN resellers and operators running fleets of WireGuard servers
+- Teams that need controlled, audited access to VPN config management
+- Service providers offering VPN subscriptions with a self-service client portal
+
+---
+
+## Key Features
+
+| Feature | Description |
+|---------|-------------|
+| Multi-server management (paid) | Manage remote nodes from one panel — Business tier; FREE runs two local protocol endpoints on one host |
+| Remote agent (paid) | Separately delivered HTTP agent replaces SSH for day-to-day operations |
+| Client portal | End-user web UI for self-registration, payment, and config download |
+| Telegram bots | Admin bot for operations, client bot for self-service |
+| Traffic & bandwidth | Per-client traffic counters, limits, and `tc`-based bandwidth shaping |
+| Subscriptions | Plan-based billing with built-in NOWPayments (crypto) integration |
+| Automatic updates | Signed manifest, checksum-verified package, and rollback support |
+| Backup and restore | Manual backup/restore on FREE; scheduled backups on Business+ |
+| Drift detection | Automatic comparison of DB state vs live WireGuard interface with auto-reconcile |
+| AmneziaWG support | Full support for obfuscated WireGuard with obfuscation parameters |
+| White-label | Custom branding: name, logo, colors, domain |
+
+---
+
+## WireGuard vs AmneziaWG
+
+Flirexa supports both protocols transparently.
+
+**WireGuard** is the standard protocol. It is fast, widely supported, and works out of the box on most clients. Use it by default.
+
+**AmneziaWG** is an obfuscated variant of WireGuard that hides the VPN traffic signature. It is useful in environments where standard WireGuard is blocked by DPI firewalls. The server requires the `amneziawg-dkms` kernel module. Clients must use the AmneziaVPN app (available for Android, iOS, Windows, macOS).
+
+When you add a server, you select the type: `wireguard` or `amneziawg`. All subsequent operations — peer management, config generation, health checks — handle the protocol differences automatically.
+
+---
+
+## Quick Start
+
+**1. Install on a fresh server:**
+
+```bash
+curl -fsSL https://flirexa.biz/install.sh | sudo bash
+```
+
+Or from source:
+
+```bash
+git clone https://github.com/Flirexa/flirexa.git
+cd flirexa
+sudo bash install.sh
+```
+
+**2. Open the admin panel:**
+
+```
+http://YOUR_SERVER_IP:10086
+```
+
+Create your admin account on first visit.
+
+**3. Open the client portal** (your end-users access this):
+
+```
+http://YOUR_SERVER_IP:10090
+```
+
+**4. Activate your license (optional):**
+
+Go to **Settings → License**, paste your activation code or licence key, and click
+**Activate**.
+
+No licence is required. Without one the runtime uses **FREE** — 80 clients, one
+host with WireGuard and AmneziaWG local endpoints, no expiry, and no licence
+heartbeat. The installer and updater still contact official Flirexa services;
+installer diagnostics can be disabled with `INSTALL_TELEMETRY=off`.
+
+**5. Add your first client:**
+
+Go to **Clients → Add Client**, enter a name, select the server, click **Create**.
+
+Download the `.conf` file or scan the QR code with the WireGuard mobile app.
+
+---
+
+## Setting Up Domains (Recommended)
+
+By default both panels are accessible by IP and port. To bind them to domains with HTTPS:
+
+**During installation** — the installer asks interactively and offers two options:
+
+- **Option 1:** Client portal on its own domain (Let's Encrypt) + admin panel via IP with self-signed TLS
+- **Option 2:** Both panels on separate domains with Let's Encrypt certificates
+
+Just answer the prompts — the installer handles nginx config and certificate issuance automatically.
+
+To pre-configure for non-interactive installs:
+
+```bash
+# Option 1: portal on domain, admin by IP
+export SB_WEB_SETUP_MODE=portal_admin_ip
+export SB_CLIENT_PORTAL_DOMAIN=portal.yourdomain.com
+export SB_CERTBOT_EMAIL=your@email.com
+sudo -E bash install.sh --non-interactive
+
+# Option 2: both on domains
+export SB_WEB_SETUP_MODE=portal_admin_domain
+export SB_CLIENT_PORTAL_DOMAIN=portal.yourdomain.com
+export SB_ADMIN_PANEL_DOMAIN=admin.yourdomain.com
+export SB_CERTBOT_EMAIL=your@email.com
+sudo -E bash install.sh --non-interactive
+```
+
+**After installation** — via the admin panel:
+
+Go to **Settings → Web Access** → enter your domains → click **Apply**. SSL certificates are issued automatically via Let's Encrypt.
+
+Or via command line:
+
+```bash
+cd /opt/vpnmanager
+sudo bash scripts/configure-web-access.sh \
+  --mode portal_admin_domain \
+  --admin-domain admin.yourdomain.com \
+  --portal-domain portal.yourdomain.com \
+  --email your@email.com
+```
+
+> **Requirements:** DNS A-records for both domains must already point to your server IP. Ports 80 and 443 must be open.
+
+After setup:
+- Admin panel → `https://admin.yourdomain.com`
+- Client portal → `https://portal.yourdomain.com`
+
+---
+
+## What Happens Next
+
+- [Installation details →](installation.md)
+- [Adding remote servers →](add-server.md)
+- [Managing clients →](client-management.md)
+- [Update mechanism →](updates.md)
+- [Full architecture overview →](architecture.md)
+
+========================================================================================
+FILE: installation.md
+========================================================================================
+# Installation
+
+_Last verified: 2026-07-30._
+
+---
+
+## System Requirements
+
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| OS | Ubuntu Server 22.04 LTS | Ubuntu Server 24.04 LTS |
+| CPU | 2 cores | 4 cores |
+| RAM | 4 GB | 8 GB |
+| Disk | 40 GB | 80 GB |
+| Access | root | root |
+| Network | Public IP | Public IP + domain name |
+
+Other Debian-family systems may pass best-effort checks, but they are outside
+the production support matrix.
+
+The installer requires internet access to download system/Python packages and the
+official Flirexa release manifest/package.
+
+---
+
+## Option A: Automated Install (Recommended)
+
+```bash
+curl -fsSL https://flirexa.biz/install.sh | sudo bash
+```
+
+Or clone the repository and run the installer from source:
+
+```bash
+git clone https://github.com/Flirexa/flirexa.git
+cd flirexa
+sudo bash install.sh
+```
+
+The installer runs fully interactive. It will ask for:
+
+- **Telegram bot tokens** — optional, can be configured later via the admin panel
+- **Admin Telegram user IDs** — who receives admin bot notifications
+- **WireGuard endpoint** — auto-detected, you confirm or override (format: `ip:port`)
+- **Activation code** — or `N` to run the FREE tier (80 clients, no expiry)
+- **Optional HTTPS setup** — domains and a Let's Encrypt contact email when selected
+
+The installer performs these steps automatically:
+
+1. Installs system packages: PostgreSQL, WireGuard tools, Python 3.10+
+2. Creates the database and generates secure credentials
+3. Creates a Python virtual environment and installs dependencies
+4. Generates `.env` with unique secrets
+5. Initializes the database schema via Alembic migrations
+6. Installs and enables systemd services
+7. Enables IP forwarding
+8. Creates and starts the local WireGuard interface (`wg0`)
+9. Registers the local server in the admin panel
+10. Runs a post-install health check
+
+On an in-place reinstall, all managed services including the background worker
+are stopped before application files are replaced. Package-owned compiled admin
+and portal output directories are pruned before new hashed assets are copied;
+database contents, `.env`, uploads, licence state, and backups are preserved.
+
+When complete, the installer prints the access URL. The first browser visit creates
+the administrator account.
+
+### Installer diagnostics
+
+By default, the installer sends coarse phase events to the official Flirexa service.
+A failed event can include a bounded tail of the install log; the receiving web
+server also sees the request source IP as it does for any HTTP request. Client
+records, VPN keys, database contents, bot tokens, and generated secrets are not
+part of this event payload.
+
+The interactive installer also offers optional installation assistance. If the
+operator enters an email address, that is explicit consent for Flirexa to send
+one English-language help email only if this installation attempt fails. The
+address is not used for marketing, is deleted after a successful install, and
+otherwise expires after seven days. Failure emails contain the failed stage and
+installation ID, never the diagnostic log.
+
+Disable diagnostics and the optional assistance flow before invoking the script:
+
+```bash
+curl -fsSL https://flirexa.biz/install.sh -o /tmp/flirexa-install.sh
+sudo INSTALL_TELEMETRY=off bash /tmp/flirexa-install.sh
+```
+
+### Non-Interactive Mode
+
+For automated or scripted deployments:
+
+```bash
+sudo bash install.sh --non-interactive
+```
+
+Set configuration via environment variables before running:
+
+| Variable | Description |
+|----------|-------------|
+| `SB_ADMIN_TOKEN` | Telegram admin bot token |
+| `SB_ADMIN_USERS` | Admin Telegram user IDs (comma-separated) |
+| `SB_CLIENT_TOKEN` | Telegram client bot token |
+| `SB_ENDPOINT` | WireGuard endpoint in `ip:port` format |
+| `SB_DB_PASSWORD` | PostgreSQL password (auto-generated if not set) |
+| `SB_ACTIVATION_CODE` | Activation code (`XXXX-XXXX-XXXX-XXXX`) |
+| `SB_SUPPORT_EMAIL` | Opt in to one English help email if installation fails |
+| `INSTALL_TELEMETRY` | Set to `off` to disable diagnostics and optional installation assistance |
+
+Example:
+
+```bash
+export SB_ENDPOINT="203.0.113.10:51820"
+export SB_ACTIVATION_CODE="ABCD-1234-EFGH-5678"
+export SB_SUPPORT_EMAIL="operator@example.com"
+sudo -E bash install.sh --non-interactive
+```
+
+### Custom Install Directory
+
+```bash
+sudo bash install.sh --install-dir /opt/custom-path
+```
+
+Default install directory is `/opt/vpnmanager`.
+
+---
+
+## Option B: Docker
+
+```bash
+git clone https://github.com/Flirexa/flirexa.git
+cd flirexa
+cp .env.example .env
+```
+
+Edit `.env`. Required fields:
+
+| Variable | How to set |
+|----------|-----------|
+| `DB_PASSWORD` | Any secure password |
+| `SECRET_KEY` | `openssl rand -hex 32` |
+| `JWT_SECRET` | `openssl rand -hex 32` |
+| `SERVICE_API_TOKEN` | `openssl rand -hex 32` |
+| `VMS_ENCRYPTION_KEY` | `openssl rand -hex 32` (back this up with the database) |
+| `SERVER_ENDPOINT` | `your-ip:51820` |
+
+Start:
+
+```bash
+docker compose up -d
+```
+
+With Telegram bots:
+
+```bash
+docker compose --profile bots up -d
+```
+
+The compose stack refuses to start while example secrets remain in `.env`, and only
+the API container runs Alembic migrations.
+
+> **Docker scope:** the compose file is suitable for evaluation and control-plane
+> development. A VPN data-plane deployment still requires the WireGuard kernel
+> module, host networking/routing, and access to `/etc/wireguard`. The systemd
+> installer is the recommended production path.
+
+---
+
+## First Steps After Installation
+
+### 1. Open the Admin Panel
+
+```
+http://YOUR_SERVER_IP:10086
+```
+
+On first visit, create your administrator account. Use a strong password (minimum 8 characters).
+
+The **client portal** (for your end-users) is available at:
+
+```
+http://YOUR_SERVER_IP:10090
+```
+
+### 2. Activate Your License
+
+1. Open **Settings** in the sidebar
+2. Scroll to the **License** section
+3. Paste your activation code or license key
+4. Click **Activate**
+
+Without a licence key the runtime stays on the **FREE** tier — forever, with no
+licence heartbeat. Installer diagnostics and update checks are separate:
+
+| Tier | Price | Clients | Servers | Notes |
+|------|-------|---------|---------|-------|
+| FREE | $0 | 80 | 1 host / 2 local endpoints | WireGuard + AmneziaWG, no licence needed |
+| Starter | from $12/mo | 500 | 1 host | + Hysteria2, TUIC, VLESS-Reality, promo codes |
+| Business | from $49/mo | 2000 | up to 10 nodes | + multi-server, client Telegram bot, full payment suite, traffic rules, scheduled backups |
+| Enterprise | from $149/mo | Unlimited | Unlimited | + corporate VPN, full white-label, standard client apps, manager RBAC |
+
+Current checkout pricing and billing periods are listed on
+[flirexa.biz](https://flirexa.biz).
+
+### 3. Verify WireGuard
+
+```bash
+sudo systemctl status wg-quick@wg0 --no-pager
+sudo wg show
+```
+
+You should see:
+- Service status: `active (running)`
+- Interface `wg0` listed with a public key and listening port
+
+The admin panel → **Servers** should show the local server with status `online`.
+
+---
+
+## Configuration Reference
+
+The `.env` file at the install directory holds all settings. Most can also be changed through **Settings** in the admin panel.
+
+### Core
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `DATABASE_URL` | (auto) | PostgreSQL connection string |
+| `SECRET_KEY` | (auto) | JWT signing key |
+| `API_PORT` | `10086` | Admin panel port |
+| `CLIENT_PORTAL_PORT` | `10090` | Client portal port |
+| `SERVER_ENDPOINT` | (auto) | WireGuard `ip:port` |
+| `WORKER_ENABLED` | `true` | Run background worker as separate service |
+
+### Telegram Bots
+
+| Setting | Description |
+|---------|-------------|
+| `ADMIN_BOT_TOKEN` | Token from @BotFather |
+| `ADMIN_BOT_ALLOWED_USERS` | Comma-separated Telegram user IDs |
+| `CLIENT_BOT_TOKEN` | Client bot token |
+| `CLIENT_BOT_ENABLED` | `true` or `false` |
+
+### Payments
+
+NOWPayments is the built-in crypto provider available on FREE. Other providers are
+licence-gated; their delivery/configuration differs by provider.
+
+| Setting | Description |
+|---------|-------------|
+| `NOWPAYMENTS_API_KEY` | NOWPayments API key (crypto — built-in FREE provider) |
+| `NOWPAYMENTS_IPN_SECRET` | NOWPayments IPN secret for webhook signature verification |
+| `NOWPAYMENTS_SANDBOX` | `true` for sandbox, `false` for live |
+| `CRYPTOPAY_API_TOKEN` | CryptoPay (@CryptoBot) API token |
+| `CRYPTOPAY_TESTNET` | `true` for sandbox, `false` for live |
+| `PAYLIO_API_KEY` | PayLio API key (paid provider) |
+| `PAYLIO_PAYOUT_ADDRESS` | Polygon USDC payout address |
+| `PAYLIO_CURRENCIES` | Comma-separated customer currencies (default `USD,EUR`) |
+
+---
+
+## Service Management
+
+```bash
+# Check all services
+systemctl status vpnmanager-api
+systemctl status vpnmanager-worker
+systemctl status vpnmanager-client-portal
+systemctl status vpnmanager-admin-bot
+systemctl status vpnmanager-client-bot
+
+# Restart a service
+systemctl restart vpnmanager-api
+
+# View live logs
+journalctl -u vpnmanager-api -f
+
+# Last 100 lines
+journalctl -u vpnmanager-api -n 100 --no-pager
+```
+
+---
+
+## HTTPS / SSL
+
+### During Installation
+
+The installer can configure TLS automatically. In interactive mode it will ask you. In non-interactive mode:
+
+```bash
+export SB_WEB_SETUP_MODE=portal_admin_domain
+export SB_CLIENT_PORTAL_DOMAIN=portal.example.com
+export SB_ADMIN_PANEL_DOMAIN=admin.example.com
+export SB_CERTBOT_EMAIL=admin@example.com
+sudo -E bash install.sh --non-interactive
+```
+
+### After Installation
+
+```bash
+cd /opt/vpnmanager
+sudo bash scripts/configure-web-access.sh \
+  --mode portal_admin_domain \
+  --portal-domain portal.example.com \
+  --admin-domain admin.example.com \
+  --email admin@example.com
+```
+
+Or configure via **Settings → Web Access** in the admin panel.
+
+**Requirements:**
+- DNS must already point to this server before running certbot
+- Let's Encrypt requires ports 80 and 443 to be reachable from the internet
+
+---
+
+## Reset Admin Password
+
+If you still have a working session, change your password from **Settings → Account**
+in the admin panel.
+
+If you are locked out, there is no dedicated CLI reset command. Recover access by
+re-running the installer over the existing installation — it detects the existing
+`.env` and lets you re-create the administrator account without touching your data:
+
+```bash
+sudo bash install.sh
+```
+
+========================================================================================
+FILE: known-issues.md
+========================================================================================
+# Known Issues
+
+_Last verified: 2026-08-18._
+
+This page contains current, actionable product behavior only. Historical
+incidents and release notes live in Git and the changelog.
+
+## 1. Portal startup warning during installation
+
+The installer can report a client-portal warning while that service is still
+starting. A final healthy result means the installation completed correctly.
+If the warning remains, run:
+
+```bash
+sudo vpnmanager health
+sudo vpnmanager services status
+```
+
+## 2. Brief portal warning after a full service restart
+
+After `sudo vpnmanager services restart --all --yes`, wait a few seconds and
+run `sudo vpnmanager health`. A healthy result means no further action is
+required.
+
+## 3. Automatic end-customer renewal is temporarily unavailable
+
+The client portal currently uses manual checkout/renewal. Existing signed
+`auto_renewal` entitlements remain compatible, but the toggle and API stay
+fail-closed until every extension can be tied to one newly verified provider
+settlement. This does not change Flirexa monthly, annual, or Lifetime licence
+purchases.
+
+## 4. AmneziaWG availability depends on the operating-system release
+
+The supported Ubuntu 22.04 LTS and 24.04 LTS profiles normally receive
+WireGuard and AmneziaWG. A newer or otherwise unsupported OS may not have a
+compatible AmneziaWG package repository yet. The installer reports this before
+changing the host and requires explicit consent before continuing with
+WireGuard only; it must not claim that AmneziaWG was installed.
+
+For unattended installation, reduced protocol availability must be accepted
+explicitly:
+
+```bash
+SB_ALLOW_WIREGUARD_ONLY=1 sudo bash install.sh --non-interactive
+```
+
+This flag does not make the detected OS part of the supported production
+matrix.
+
+## Support rule
+
+For inconsistent or degraded behavior, collect:
+
+```bash
+sudo vpnmanager status
+sudo vpnmanager health
+sudo vpnmanager support-bundle --output /tmp --redact-strict
+```
+
+Attach the redacted bundle and exact error message to the support request.
+
+========================================================================================
+FILE: licensing.md
+========================================================================================
+# Licensing
+
+_Last verified: 2026-08-18._
+
+## Obtaining your activation code
+
+After the payment provider confirms settlement, one activation code is created
+and sent to the email address supplied at checkout. A browser redirect or
+thank-you page is not proof of payment and does not issue a licence by itself.
+
+Keep your activation code safe. It is your proof of purchase. You can install
+the FREE tier first and activate a paid licence later from the panel.
+
+## Activation code format
+
+```
+XXXX-XXXX-XXXX-XXXX
+```
+
+16 alphanumeric characters separated by dashes.
+
+## Activating your license
+
+1. Open the admin panel
+2. Navigate to **Settings > License**
+3. Paste your activation code
+4. Click **Activate**
+
+The license is activated immediately upon successful verification.
+
+## Hardware binding
+
+Most paid licences are bound to a derived server hardware identifier. This means:
+
+- The license is valid only on the specific server where it was activated
+- Moving to a different server requires a license transfer (see below)
+- The hardware ID is generated automatically during activation
+
+## Grace period
+
+Subscription licences normally have a **72-hour offline tolerance** backed by a
+locally cached signed status. Lifetime is a perpetual entitlement and rotates a
+hardware-, instance-, and licence-bound signed offline lease valid for at most
+30 days after successful validation. A vendor-signed emergency lease is the
+support path for a prolonged licensing-service incident; customers cannot
+self-sign or extend it.
+
+## License verification
+
+Activated subscription/protected licences periodically contact the official
+licence service. Validation and heartbeat requests can include:
+
+- the licence key or a one-way licence identifier, plus a masked activation-code prefix;
+- derived hardware and persistent instance identifiers;
+- hostname, application version, licence status, uptime, and timestamps;
+- migration receipts when a licensed installation is being moved;
+- normal HTTP request metadata, including source IP.
+
+These requests do **not** include the VPN client list, VPN keys/configurations,
+traffic contents, traffic counters, payment records, or portal user data. An
+unactivated FREE runtime has no licence heartbeat. Installer diagnostics and
+update checks are separate and documented in [installation.md](installation.md)
+and [updates.md](updates.md).
+
+## License transfer
+
+If you need to move your installation to a different server, contact [support@flirexa.biz](mailto:support@flirexa.biz) to request a hardware rebinding. Include your activation code and the reason for the transfer.
+
+Lifetime includes future normal product updates. Official updates preserve
+managed data and licence state, but may replace unsupported direct edits inside
+the product tree. Paid purchases include one month of daily onboarding and
+operational help from the purchase date, followed by priority ticket support.
+
+## Internal development mode
+
+The software includes a development mode intended for internal testing only. This mode is **not licensed for production use** and must not be used to serve real clients.
+
+## Troubleshooting
+
+| Issue | Resolution |
+|-------|------------|
+| "License invalid" after server migration | Contact support for hardware rebinding |
+| Activation code not accepted | Verify the code format (XXXX-XXXX-XXXX-XXXX) and check for typos |
+| License deactivated | Ensure the server can reach `flirexa.biz` and that the license is not active on another server |
+
+========================================================================================
+FILE: operations-runbook.md
+========================================================================================
+# Operations Runbook
+
+_Last verified: 2026-07-24._
+
+This is the day-to-day operator and support runbook for the commercial product line.
+
+## 1. Check System Status
+
+```bash
+sudo vpnmanager status
+sudo vpnmanager health
+sudo vpnmanager services status
+sudo vpnmanager license status
+```
+
+Use these first before taking any recovery action.
+
+## 2. Maintenance Mode
+
+Enable maintenance:
+
+```bash
+sudo vpnmanager maintenance on --reason "planned maintenance"
+```
+
+Disable maintenance:
+
+```bash
+sudo vpnmanager maintenance off
+```
+
+Use maintenance mode before planned disruptive work.
+
+## 3. Restart Services
+
+Restart only API:
+
+```bash
+sudo vpnmanager services restart --api
+```
+
+Restart all managed services:
+
+```bash
+sudo vpnmanager services restart --all --yes
+```
+
+After restart, verify:
+
+```bash
+sudo vpnmanager health
+```
+
+## 4. Create Backup
+
+Full backup:
+
+```bash
+sudo vpnmanager backup --full --output /root/backups
+```
+
+DB-only backup:
+
+```bash
+sudo vpnmanager backup --db-only --output /root/backups
+```
+
+Store backups outside the server as well.
+
+## 5. Restore On The Same Server
+
+```bash
+sudo vpnmanager restore --archive /root/backups/vpnmanager-backup-<id>.tar.gz --yes
+```
+
+Then verify:
+
+```bash
+sudo vpnmanager status
+sudo vpnmanager health
+```
+
+## 6. Restore On A New Server
+
+1. install a supported Flirexa generation from the official channel
+2. copy the backup archive to the new server without renaming it
+3. run restore
+
+```bash
+curl -fsSL https://flirexa.biz/install.sh -o /tmp/flirexa-install.sh
+sudo bash /tmp/flirexa-install.sh --non-interactive
+sudo vpnmanager restore --archive /root/backups/vpnmanager-backup-<id>.tar.gz --yes
+sudo vpnmanager status
+sudo vpnmanager health
+```
+
+## 7. Support Bundle
+
+```bash
+sudo vpnmanager support-bundle --output /root/support --redact-strict
+```
+
+Inspect the redacted bundle before sending it. Send it together with:
+- brief problem description
+- timestamp of failure
+- command output from `status` and `health`
+
+## 8. What To Store Separately
+
+Keep these outside the running server:
+- full backup archives
+- DB-only backup archives if used operationally
+- support bundles for incidents
+- commercial license key / activation data
+- a supported release package if your licence provides one for offline recovery
+
+Keep licence/activation data in your own credential store; do not include it in
+support tickets or bundles.
+
+## 9. Where Logs Are
+
+Primary logs:
+- `journalctl -u vpnmanager-api`
+- `journalctl -u vpnmanager-client-portal`
+- `journalctl -u vpnmanager-worker`
+
+Update logs:
+- `.../backups/update_backups/.../apply.log`
+
+## 10. Recovery Triage
+
+### If `status = failed`
+1. run `sudo vpnmanager health`
+2. run `sudo vpnmanager services status`
+3. collect support bundle
+
+### If `health = failed`
+1. inspect services
+2. restart targeted service if justified
+3. collect support bundle
+4. if issue follows failed restore/update, use restore/rollback workflow
+
+### If `restore failed`
+1. do not hand-edit DB
+2. collect support bundle
+3. inspect journald
+4. rerun only with clear reason, otherwise escalate
+
+### If `update failed`
+1. run `sudo vpnmanager status`
+2. run `sudo vpnmanager health`
+3. collect support bundle
+4. inspect latest apply log
+5. use documented rollback/update recovery path
+
+========================================================================================
+FILE: payment-setup.md
+========================================================================================
+# Payment Setup
+
+_Last verified: 2026-08-16._
+
+Flirexa supports **8 payment providers** for the client portal. Customers can pay
+for subscriptions in crypto, cards, bank rails, or local methods.
+
+> **Free tier:** only NOWPayments is available to your customers. CryptoPay,
+> PayLio, PayPal, Stripe, Mollie, Razorpay, and Payme require a paid Flirexa
+> licence. The gate is enforced by the API and UI.
+
+---
+
+## Supported Providers
+
+| Provider | Type | Currencies | Best for | Tier |
+|---|---|---|---|---|
+| [**NOWPayments**](#nowpayments) | Crypto (100+) | BTC, ETH, USDT, USDC, LTC, XMR, TON, SOL… | Most flexible crypto rail | Free |
+| [**CryptoPay**](#cryptopay-telegram) | Crypto (Telegram bot) | BTC, TON, USDT, USDC, BUSD, ETH | Telegram-centric VPN brands | Paid |
+| [**PayLio**](#paylio) | Cards / bank rails, USDC settlement | USD, EUR, GBP, CAD | Card checkout with Polygon USDC payout | Paid |
+| [**PayPal**](#paypal) | PayPal + cards | USD, EUR, GBP | International cards & PayPal balance | Paid |
+| [**Stripe**](#stripe) | Cards + Apple/Google Pay | USD, EUR, GBP, CAD, AUD, JPY | EU/US card payments | Paid |
+| [**Mollie**](#mollie) | Cards + iDEAL + SEPA + Klarna | EUR, USD, GBP | Europe-focused | Paid |
+| [**Razorpay**](#razorpay) | UPI, NetBanking, cards | INR, USD, EUR | India | Paid |
+| [**Payme**](#payme) | UzCard, Humo, Visa, Mastercard | UZS | Uzbekistan | Paid |
+
+Most providers are configured from a single page in the admin panel:
+
+> **Settings → Payment Providers → Configure**
+
+Each provider has its own card with:
+- the required fields (API key, secrets, etc. — what to paste comes from the provider dashboard);
+- the exact **webhook URL** to register at the provider's side (auto-generated from your `CLIENT_PORTAL_DOMAIN`, with a one-click Copy button);
+- **Save & Connect**, **Test** (runs a self-check without real charges), **Disconnect**.
+
+PayLio currently uses `.env` configuration as documented below rather than a
+credential card in Settings.
+
+## Customer account balance (Business+)
+
+Business and Enterprise installations can let customers prepay account credit.
+On the client portal Billing page, the customer selects **Add funds**, completes
+checkout through any configured paid provider, and receives USD credit only
+after Flirexa verifies settlement with that provider. The customer can then
+select **Account balance** when purchasing or renewing a subscription.
+
+Balances and their transaction history use exact integer cents. Repeated
+provider callbacks or repeated purchase requests do not credit or debit twice.
+Administrators can view the balance in the portal-user detail and make an
+audited manual credit or debit with a required reason; a debit cannot take the
+account below zero. The feature is hidden and rejected by the API when the
+installation does not have the signed Business `payments` entitlement.
+
+> **About webhook URLs in this guide:** every section below lists `https://YOUR_HOST/client-portal/webhooks/<provider>` for documentation purposes. **Don't copy that template manually.** Open the provider's card in your admin panel — the actual URL with your real domain is shown there with a Copy button. That's the one you paste into the provider's dashboard.
+
+---
+
+## NOWPayments
+
+Universal crypto provider — your customer picks any of 100+ tokens.
+
+### What you need
+
+| Field | Where to get it |
+|---|---|
+| **API Key** | <https://account.nowpayments.io/store-settings/api-keys> → click **Add new key** |
+| **IPN Secret** | Same dashboard → **Store Settings** → **IPN Settings** → generate IPN Secret |
+| **Sandbox** | Toggle ON if you used the [sandbox](https://account-sandbox.nowpayments.io) keys above |
+
+### Webhook URL to register
+
+In the NOWPayments dashboard → **Store Settings** → **IPN Settings** → set **IPN callback URL**:
+
+```
+https://YOUR_HOST/client-portal/webhooks/nowpayments
+```
+
+No event selection — NOWPayments sends an IPN for every status change. We only credit on `finished` (per the [official IPN spec](https://documenter.getpostman.com/view/7907941/S1a32n38#instant-payments-notifications)).
+
+### Steps
+
+1. Settings → Payment Providers → Configure → expand **NOWPayments**
+2. Paste API Key + IPN Secret, leave Sandbox OFF for production
+3. **Save & Connect** — badge turns to *Active*
+4. Click **Test** — should return all green checks
+5. Register the webhook URL above in NOWPayments dashboard
+6. Done — customers see NOWPayments on the Billing page
+
+### Reference
+
+- API docs: <https://documenter.getpostman.com/view/7907941/S1a32n38>
+- Sandbox dashboard: <https://account-sandbox.nowpayments.io>
+
+---
+
+## CryptoPay (Telegram)
+
+Crypto payments via [@CryptoBot](https://t.me/CryptoBot). Customer pays straight from their Telegram wallet — no exchange, no on-chain wait.
+
+### What you need
+
+| Field | Where to get it |
+|---|---|
+| **API Token** | [@CryptoBot](https://t.me/CryptoBot) (or [@CryptoTestnetBot](https://t.me/CryptoTestnetBot) for testing) → **Crypto Pay** → **Create App** → copy token |
+| **Testnet** | Toggle ON if you used `@CryptoTestnetBot` instead of `@CryptoBot` |
+
+### Webhook URL to register
+
+In the bot: **Crypto Pay** → **My Apps** → choose your app → **Webhooks** → set:
+
+```
+https://YOUR_HOST/client-portal/webhooks/cryptopay
+```
+
+### Reference
+
+- API docs: <https://help.crypt.bot/crypto-pay-api>
+- Test bot: <https://t.me/CryptoTestnetBot>
+
+---
+
+## PayLio
+
+PayLio presents card/bank checkout to the customer and settles the operator in
+USDC on Polygon.
+
+1. Create a PayLio account and API key.
+2. Choose a Polygon-compatible USDC payout address.
+3. Add the following to `/opt/vpnmanager/.env`:
+
+```dotenv
+PAYLIO_API_KEY=plio_live_REPLACE_ME
+PAYLIO_PAYOUT_ADDRESS=0xREPLACE_WITH_POLYGON_ADDRESS
+PAYLIO_CURRENCIES=USD,EUR
+# Optional upstream rail preference; empty lets PayLio choose.
+PAYLIO_PROVIDER=
+CLIENT_PORTAL_DOMAIN=portal.example.com
+```
+
+4. Restart the API and client portal.
+
+The callback is
+`https://YOUR_HOST/client-portal/webhooks/paylio`. PayLio's GET callback is
+treated only as a notification: Flirexa re-queries PayLio's payment-status API
+before crediting the subscription.
+
+API reference: <https://paylio.org/api-docs>
+
+---
+
+## PayPal
+
+PayPal balance and major card networks (Visa, Mastercard, Discover, Amex).
+
+### What you need
+
+| Field | Where to get it |
+|---|---|
+| **Client ID** | <https://developer.paypal.com/dashboard/applications> → create or open an app |
+| **Client Secret** | Same app page (click **Show**) |
+| **Webhook ID** | Same app page → **Webhooks** → create webhook → copy ID |
+| **Sandbox** | Toggle ON if the credentials above are from the *Sandbox* mode of the PayPal Developer Dashboard |
+
+### Webhook URL to register
+
+In your PayPal app → **Webhooks** → **Add Webhook**:
+
+- URL: `https://YOUR_HOST/client-portal/webhooks/paypal`
+- **Events to subscribe:**
+  - `Checkout order approved` (`CHECKOUT.ORDER.APPROVED`)
+  - `Payment capture completed` (`PAYMENT.CAPTURE.COMPLETED`)
+
+After saving, copy the webhook **ID** (looks like `8YR1A6781E6543210`) and paste it into the Webhook ID field in the admin panel.
+
+Also make sure the panel's public client portal URL is the final HTTPS address.
+PayPal sends the buyer back to `/payments` on that address after approval; an
+HTTP address or a placeholder host is rejected instead of creating a broken
+checkout.
+
+Click **Test** after saving. In addition to testing the API credentials,
+Flirexa checks that the Webhook ID exists under the same PayPal app, that its
+URL matches this portal, and that the required order-approved and
+capture-completed events are subscribed. Credentials from one app and a
+Webhook ID from another are therefore reported before a customer pays.
+
+### Sandbox vs Production
+
+PayPal has two completely separate worlds:
+- **Sandbox** at <https://developer.paypal.com/dashboard/applications/sandbox> — fake money, fake test accounts
+- **Live** at <https://developer.paypal.com/dashboard/applications/live> — real money
+
+Each has its own Client ID + Client Secret + Webhook ID. **You cannot mix them.**
+
+### Reference
+
+- Orders API: <https://developer.paypal.com/docs/api/orders/v2/>
+- Webhook setup: <https://developer.paypal.com/api/rest/webhooks/>
+
+---
+
+## Stripe
+
+Cards (Visa, Mastercard, Amex, Discover, JCB), Apple Pay, Google Pay, plus regional methods. Best for EU/US.
+
+### What you need
+
+| Field | Where to get it |
+|---|---|
+| **Secret Key** | <https://dashboard.stripe.com/apikeys> → **Standard keys** → reveal Secret key (`sk_live_…`) |
+| **Webhook Secret** | <https://dashboard.stripe.com/webhooks> → create endpoint → reveal **Signing secret** (`whsec_…`) |
+
+### Payment methods
+
+Keep **Checkout payment methods** set to **Automatic via Stripe Dashboard**
+unless you have a specific reason to override it. In automatic mode Stripe
+shows only payment methods that are both enabled for your account and eligible
+for the current currency and customer. If Alipay, WeChat Pay, or another local
+method is unavailable, card checkout continues to work.
+
+Enable or disable methods in **Stripe Dashboard → Settings → Payment methods**.
+Newly enabled eligible methods then appear without changing Flirexa or
+restarting the portal.
+
+Two advanced overrides are available in the Stripe settings card:
+
+- **Card and card wallets only** limits Checkout to Stripe's `card` method.
+- **Manual method list** sends an explicit comma-separated list. Every listed
+  identifier must be enabled for the Stripe account; one unavailable method can
+  make Stripe reject creation of the entire Checkout session.
+
+Upgraded installations default to automatic mode even if an old
+`STRIPE_PAYMENT_METHODS` value remains in `.env`. The old list is used only
+after explicitly choosing manual mode.
+
+### Webhook URL to register
+
+In Stripe Dashboard → **Developers → Webhooks → Add endpoint**:
+
+- URL: `https://YOUR_HOST/client-portal/webhooks/stripe`
+- **Events to listen to:**
+  - `checkout.session.completed`
+  - `checkout.session.async_payment_succeeded` (settles delayed payment methods)
+
+After saving, click **Reveal signing secret** and paste into the Webhook Secret field in admin.
+
+### Test mode
+
+Stripe has Test mode (toggle in top-left of Dashboard). Test keys start with `sk_test_…` and `whsec_…` (test webhooks have their own signing secret). Use the same admin form, just paste test keys.
+
+Stripe provides [official test card numbers](https://stripe.com/docs/testing#cards) — `4242 4242 4242 4242` for successful charge.
+
+### Reference
+
+- API: <https://stripe.com/docs/api>
+- Webhook signatures: <https://stripe.com/docs/webhooks/signatures>
+
+---
+
+## Mollie
+
+European-favorite — iDEAL, Bancontact, SEPA, Klarna, plus international cards.
+
+### What you need
+
+| Field | Where to get it |
+|---|---|
+| **API Key** | <https://www.mollie.com/dashboard/developers/api-keys> → copy **Live API key** (`live_…`) or **Test API key** (`test_…`) |
+
+### Webhook URL
+
+Mollie webhooks are passed *per-payment* (we set them when creating the invoice) — no global webhook URL to register at the Mollie dashboard. Just enter the API key, it works.
+
+### Test mode
+
+Mollie test keys (`test_…`) work in Test mode where you can pay with [test method picker](https://docs.mollie.com/overview/testing). No real money.
+
+### Reference
+
+- API: <https://docs.mollie.com/>
+- Webhook spec: <https://docs.mollie.com/payments/webhook>
+
+---
+
+## Razorpay
+
+India-focused: UPI, NetBanking, cards (Visa, Mastercard, RuPay, Amex), wallets. Also supports international cards in USD/EUR.
+
+### What you need
+
+| Field | Where to get it |
+|---|---|
+| **Key ID** | <https://dashboard.razorpay.com/app/keys> → **Generate Key** → copy Key ID (`rzp_live_…`) |
+| **Key Secret** | Same page — shown only at creation, save it immediately |
+| **Webhook Secret** | <https://dashboard.razorpay.com/app/webhooks> → create webhook → set a secret |
+
+### Webhook URL to register
+
+In Razorpay Dashboard → **Settings → Webhooks → Add Webhook**:
+
+- URL: `https://YOUR_HOST/client-portal/webhooks/razorpay`
+- **Active Events:**
+  - `payment.captured`
+  - `payment_link.paid`
+- Set **Secret** to a random string — paste the same string into the **Webhook Secret** field in admin
+
+### Test mode
+
+Razorpay has a Test mode toggle. Test keys start with `rzp_test_…`. Use the same admin form. Razorpay test cards: `4111 1111 1111 1111`.
+
+### Reference
+
+- API: <https://razorpay.com/docs/api/>
+- Webhook validation: <https://razorpay.com/docs/webhooks/validate-test/>
+
+---
+
+## Payme
+
+Uzbekistan local payment system — UzCard, Humo, plus Visa/Mastercard for UZS.
+
+### What you need
+
+| Field | Where to get it |
+|---|---|
+| **Merchant ID** | Payme merchant cabinet → **Settings → Merchant info** |
+| **Secret Key** | Payme merchant cabinet → **Settings → Test Cabinet / Production** → API Key |
+
+### Webhook URL to register
+
+Set in Payme merchant cabinet → **Settings → Notifications**:
+
+```
+https://YOUR_HOST/client-portal/webhooks/payme
+```
+
+Currency: **UZS only** for the actual charge. Customers paying in UZS see the right amount.
+
+### Reference
+
+- Merchant API: <https://developer.help.paycom.uz/protokol-merchant-api/>
+
+---
+
+## The "Test" button
+
+Every provider card in admin has a **Test** button next to **Save & Connect**. It's an offline self-check that:
+
+1. Verifies the provider is loaded into memory (env vars set)
+2. Pings the provider's API (`test_connection`)
+3. Generates a webhook with a valid signature → expects `verified=true`
+4. Generates a webhook with a forged signature → expects rejection
+5. Extracts the order ID from the test payload — proves the lookup will work
+
+It does **not** make any real charge. Run it after each Save and after each provider key change.
+
+A green panel under the card means everything's wired correctly. Red means something's missing — the per-row detail tells you what (e.g., "STRIPE_WEBHOOK_SECRET not configured").
+
+---
+
+## What happens when a customer pays
+
+Same flow for all providers:
+
+1. Customer clicks **Subscribe** → invoice is created on the provider's side, customer is redirected to the provider's checkout page
+2. Customer pays
+3. Provider sends a webhook to `https://YOUR_HOST/client-portal/webhooks/<provider>`
+4. Flirexa verifies the provider signature, or for PayLio re-queries the payment-status API
+5. If valid → subscription is upgraded, WG limits are applied, customer gets email/Telegram notification
+6. If signature is invalid → 401 returned, no credit
+
+If a webhook is dropped (rare — providers retry), the **monitoring loop** runs every 60 s and asks the provider directly via `check_payment(invoice_id)`. If the provider says "paid", we credit the subscription anyway. The customer never gets stuck in "I paid but my plan didn't activate".
+
+PayPal has one additional recovery path: after approval, the buyer returns to
+the authenticated `/payments` page, which asks the backend to capture and
+verify the order immediately. The return URL itself is never treated as proof
+of payment. Return handling, webhook handling, and status polling all fetch the
+authoritative PayPal order, use an idempotent capture request, and require the
+completed capture amount and currency to exactly match the local invoice before
+activating a subscription.
+
+See [webhook-security.md](webhook-security.md) for the full pipeline + how the recovery poller works.
+
+---
+
+## Common gotchas
+
+**"Provider doesn't show up for my customers"**
+- They're on the free tier — only NOWPayments is visible. [Upgrade your Flirexa license](https://flirexa.biz/#pricing) to unlock all providers.
+- The provider isn't activated — check **Settings → Payment Providers** and look for an "Active" badge.
+
+**"Customer paid but subscription isn't active"**
+- First check the webhook arrived: `journalctl -u vpnmanager-api -n 200 | grep -iE 'webhook|<provider>'`
+- If no webhook line: provider's webhook URL is misconfigured — re-check that you registered our exact URL
+- If webhook arrived but rejected (401): signature secret in admin doesn't match what's set at the provider — regenerate at the provider, paste the new value, Save
+- The recovery poller will catch it within ~60 s if `check_payment` works for that provider
+
+**"Wrong currency on checkout"**
+- NOWPayments takes the price in USD/EUR but charges any crypto — exchange happens on their side
+- PayPal/Stripe/Mollie respect what you send (USD, EUR, GBP)
+- Razorpay → INR for India, USD/EUR for international cards
+- Payme → UZS only
+
+**"My webhook URL changed (different domain)"**
+- Update it on the provider's side too — providers don't auto-detect
+- Re-register in the provider dashboard
+
+---
+
+## Disconnecting a provider
+
+Click **Disconnect** in the provider's card — keys are wiped from `.env`, the in-memory provider object is cleared, and customers lose that option immediately. Existing subscriptions are not affected.
+
+---
+
+## See also
+
+- [webhook-security.md](webhook-security.md) — webhook pipeline, signature schemes, recovery loop
+- [licensing.md](licensing.md) — which providers are unlocked at which license tier
+- [troubleshooting.md](troubleshooting.md) — common payment failures and how to debug them
+- [Support](mailto:support@flirexa.biz) — if you're stuck after the troubleshooting guide
+
+========================================================================================
+FILE: plugins.md
+========================================================================================
+# Plugins
+
+_Last verified: 2026-08-18._
+
+How the plugin system works, how to write your own community plugin, and what makes paid plugins different.
+
+---
+
+## Concepts
+
+A **plugin** is a directory under `plugins/` that:
+
+1. Has a `manifest.json` describing itself.
+2. Has an `__init__.py` that exports a `PLUGIN` symbol — an instance of `Plugin` (or a subclass).
+3. Optionally provides a FastAPI router, background tasks, or DB models.
+
+When the API starts, the **plugin loader** (`src/modules/plugin_loader/`):
+
+1. Scans `plugins/`, skipping `_example/`, `payments/`, `__pycache__/`, and any directory whose name starts with `_`.
+2. For each remaining directory, validates the `manifest.json`.
+3. Checks `LicenseManager.has_feature(manifest.requires_license_feature)`.
+4. If the licence grants the feature, imports `__init__.py`, instantiates `PLUGIN`, and mounts its router on the FastAPI app.
+5. Calls `plugin.on_load()` for any one-time setup.
+
+The whole thing is fail-soft: a broken plugin is logged and skipped, never crashes the API.
+
+---
+
+## Plugin types
+
+There are three categories you'll see in the wild:
+
+### 1. Community plugins (`requires_license_feature: "community"`)
+
+Free-as-in-freedom additions written by anyone. The licence feature `community` is treated as **always granted**, so these plugins load on every install — FREE included. Use this for:
+
+- Notification routing (Slack / Discord / Telegram alerts to operator)
+- Monitoring exporters (Prometheus / Grafana metrics)
+- Integration plugins (Zapier-style hooks, custom webhooks)
+- UI customisations
+- Locale extensions
+
+Example: a community plugin that POSTs every new client signup to a Discord webhook.
+
+### 2. Drop-in payment providers (`plugins/payments/`)
+
+A separate, simpler plugin format dating from before the generic loader. Each
+`.py` file in `plugins/payments/` defining a `PROVIDER_CLASS` is auto-registered.
+NOWPayments is the FREE provider in the core. PayLio, CryptoPay, Stripe,
+Mollie, Razorpay, Payme, PayPal, and other card/local providers are commercial
+implementations; the public paths are compatibility stubs only.
+
+To add a new payment provider, copy `plugins/payments/_template.py`, fill in the `create_invoice` / `check_payment` methods, configure credentials in `.env`, restart.
+
+Stripe Checkout uses Dynamic Payment Methods by default. Flirexa lets Stripe
+choose only methods that are enabled and eligible for the operator account,
+currency, and customer, so an unavailable regional wallet does not block card
+checkout. Operators can deliberately select card-only or a manual method list
+from payment-provider settings.
+
+PayPal uses Orders v2 and the configured public customer-portal HTTPS URL for
+both approval return and cancellation. Buyer return, signed webhook delivery,
+and status polling converge on one idempotent capture path. A subscription is
+granted only after Flirexa re-reads the order and matches a completed capture's
+amount and currency to the local invoice.
+
+### 3. Paid plugins (license-gated)
+
+Paid capabilities declare a non-`community` `requires_license_feature` and only
+load when that feature is granted. The public repository contains marked
+compatibility stubs, not the Hysteria2, TUIC, VLESS-Reality, Corporate VPN,
+multi-server, RBAC, account-balance, DNS-policy, automation, or third-party
+payment implementations. Those implementations are separately licensed and
+supplied through official customer builds.
+
+The current compatibility migration uses one universal protected commercial
+runtime for paid installations. The signed licence still decides which
+features load. Physical per-entitlement packages will replace that transition
+model only after they can preserve existing Business and Enterprise feature
+and limit contracts during update and rollback.
+
+---
+
+## Writing a community plugin
+
+Walkthrough: let's build `discord-alerts` — posts to a Discord webhook whenever a new client subscribes.
+
+### Step 1: directory layout
+
+```
+plugins/discord-alerts/
+├── manifest.json
+└── __init__.py
+```
+
+### Step 2: manifest
+
+```json
+{
+  "name": "discord-alerts",
+  "version": "1.0.0",
+  "display_name": "Discord Alerts",
+  "description": "Posts new-client and payment events to a Discord webhook.",
+  "requires_license_feature": "community",
+  "author": "your-handle"
+}
+```
+
+Field reference:
+
+| Field | Required | Notes |
+|---|:-:|---|
+| `name` | ✅ | kebab-case, 2–40 chars, must match the directory name |
+| `version` | ✅ | SemVer `MAJOR.MINOR.PATCH` |
+| `display_name` | ✅ | non-empty, shown in admin UI |
+| `requires_license_feature` | ✅ | `community` for free plugins; specific feature flag for licensed |
+| `description` | optional | one-line summary |
+| `min_app_version` | optional | minimum Flirexa version |
+| `min_tier` | optional | informational: `community` / `starter` / `business` / `enterprise` |
+| `author` | optional | GitHub handle or contact |
+| `homepage` | optional | URL |
+| `frontend_chunks` | optional | list of Vue chunk names to lazy-load on admin |
+
+Unknown fields cause manifest validation to fail loudly — typo-resistant.
+
+### Step 3: implementation
+
+```python
+"""Discord alerts plugin."""
+
+import os
+import httpx
+from fastapi import APIRouter, Request
+
+from src.modules.plugin_loader import Plugin
+
+router = APIRouter(prefix="/api/v1/plugins/discord-alerts", tags=["plugins"])
+
+
+@router.post("/event")
+async def receive_event(request: Request):
+    """Internal hook called by the subscription manager when an event fires."""
+    body = await request.json()
+    webhook = os.getenv("DISCORD_WEBHOOK_URL")
+    if not webhook:
+        return {"posted": False, "reason": "DISCORD_WEBHOOK_URL not set"}
+
+    async with httpx.AsyncClient(timeout=5) as client:
+        await client.post(webhook, json={
+            "content": f":new: {body.get('event')}: {body.get('detail')}",
+        })
+    return {"posted": True}
+
+
+class DiscordAlertsPlugin(Plugin):
+    def get_router(self):
+        return router
+
+    def on_load(self):
+        # Place to subscribe to internal event bus, register listeners, etc.
+        # For this trivial example we just log that we're alive.
+        from loguru import logger
+        logger.info("discord-alerts plugin loaded")
+
+
+_MANIFEST = {
+    "name": "discord-alerts",
+    "version": "1.0.0",
+    "display_name": "Discord Alerts",
+    "requires_license_feature": "community",
+}
+
+PLUGIN = DiscordAlertsPlugin(_MANIFEST)
+```
+
+### Step 4: configure
+
+```bash
+echo 'DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/xxx/yyy' >> /opt/vpnmanager/.env
+sudo systemctl restart vpnmanager-api
+```
+
+### Step 5: verify
+
+```
+INFO ... Plugin loaded: Discord Alerts v1.0.0 (discord-alerts)
+```
+
+The plugin's status route is now mounted at `/api/v1/plugins/discord-alerts/event`.
+
+---
+
+## Plugin lifecycle hooks
+
+The `Plugin` base class provides four hooks. Override the ones you need.
+
+```python
+class Plugin:
+    def get_router(self) -> Optional[APIRouter]:
+        """Return a FastAPI router to mount, or None if the plugin
+        doesn't add HTTP endpoints."""
+        return None
+
+    def get_features(self) -> list[str]:
+        """Return additional feature flags this plugin provides at runtime.
+        Used by the admin UI to decide which feature cards to show."""
+        return [self.requires_license_feature]
+
+    def on_load(self) -> None:
+        """Called once after the plugin has been successfully loaded.
+        Use for: subscribing to events, priming caches, starting
+        background tasks. Errors raised here are logged but don't
+        prevent the plugin from being marked active."""
+
+    def on_unload(self) -> None:
+        """Called when the plugin is being unloaded (rare; happens on
+        graceful shutdown or licence revocation). Use for cleanup."""
+```
+
+---
+
+## Database migrations from a plugin
+
+A plugin that needs its own tables ships an Alembic migration branch:
+
+```
+plugins/your-plugin/
+├── manifest.json
+├── __init__.py
+└── alembic/
+    └── versions/
+        └── 001_create_your_table.py
+```
+
+In the migration, set a `branch_labels` so Alembic treats it as a separate head:
+
+```python
+revision = "yourpl_001"
+down_revision = None
+branch_labels = ("your_plugin",)
+depends_on = "core_head"
+```
+
+The plugin loader picks up `alembic/versions/` automatically and runs `alembic upgrade your_plugin@head` on first activation. Deactivation does **not** drop the tables — your data sticks around.
+
+---
+
+## Frontend integration
+
+Plugins can ship Vue components that the admin SPA lazy-loads. Add to `manifest.json`:
+
+```json
+{
+  ...
+  "frontend_chunks": ["DiscordAlertsSettings.vue"]
+}
+```
+
+Place the file at `plugins/discord-alerts/frontend/DiscordAlertsSettings.vue`. The build pipeline picks it up automatically. The chunk loads only when the user navigates to the plugin's settings panel — no startup cost.
+
+(Frontend integration is in active development; the manifest field is honored but the build pipeline glue is still being polished. Track progress in [ROADMAP.md](../ROADMAP.md).)
+
+---
+
+## Distributing your plugin
+
+The admin panel has a **Plugins → Install by URL** form. Operators paste the
+URL of a `.tar.gz` plus the SHA-256 of that file and the system downloads,
+verifies, and installs it. The flow you build for has to match what the
+panel expects.
+
+### Packaging
+
+Tarball must contain exactly one top-level directory whose name matches
+your `manifest.json` `name`. So for `discord-alerts`:
+
+```bash
+cd plugins/                            # parent of your plugin dir
+tar czf discord-alerts-v1.0.0.tar.gz discord-alerts/
+sha256sum discord-alerts-v1.0.0.tar.gz # → 9f8a1b2c…  publish this number
+```
+
+The tarball must NOT contain absolute paths or `..`. Tarballs over 25 MB
+are rejected.
+
+### Publishing
+
+1. Cut a release on GitHub (or any public storage). Upload the `.tar.gz`.
+2. Publish the SHA-256 either in the release description or in a
+   `discord-alerts-v1.0.0.tar.gz.sha256` file alongside.
+3. Tell people the download URL.
+
+### Installation (operator-side)
+
+In the admin panel: **Plugins → Install by URL → paste URL & SHA-256 →
+Download & install → restart the API** (`systemctl restart
+vpnmanager-api`).
+
+The plugin sits under `plugins/<name>/` afterwards. It can be uninstalled
+the same way (one click in the panel; deletes the directory and removes
+the entry from the user-installed index).
+
+### Discoverability
+
+There's no central registry yet. Authors publish on GitHub with the
+`flirexa-plugin` topic so they're searchable. A curated catalog on
+`flirexa.biz/plugins` is on the roadmap.
+
+### Commercial plugins
+
+Want to charge for your plugin? Email `support@flirexa.biz`. We're open
+to a marketplace cut for third-party paid plugins — the infrastructure
+is part of the 2026 Q3 plugin-marketplace roadmap item.
+
+---
+
+## What plugins should and shouldn't do
+
+✅ **Good plugin behaviour:**
+- Single, clear purpose
+- Configuration via `.env` env vars, not hardcoded
+- Mount routes under `/api/v1/plugins/<name>/...`
+- Idempotent — safe to reload, restart, even if your data already exists
+- Log via `loguru` so logs end up in the right place
+
+❌ **Avoid:**
+- Modifying core SQLAlchemy models. Add your own tables instead.
+- Reaching into private symbols of `src/api/` modules. The public API is the place.
+- Doing slow work in `on_load()` — that blocks API startup. Spawn a background task instead.
+- Phoning home without operator consent. Even community plugins should ask `OPERATOR_ANALYTICS_ENABLED=true` first.
+
+---
+
+## Where the plugin system is going
+
+Tracked in [ROADMAP.md](../ROADMAP.md):
+
+- **Done in 1.4.61** — install / uninstall plugins by URL from the admin
+  panel, with SHA-256 integrity check.
+- **2026 Q3:** authenticated, integrity-checked distribution for separately
+  delivered commercial extensions.
+- **2026 Q3:** curated plugin catalog at `flirexa.biz/plugins` —
+  author submission form + manual review + listing.
+- **2026 Q4:** frontend chunk lazy-loading polished.
+
+If you want to pre-empt the marketplace and build something now, go for it — the plugin API is stable and the manifest format won't change.
+
+========================================================================================
+FILE: pricing.md
+========================================================================================
+# Pricing
+
+_Last verified: 2026-08-18. The checkout on [flirexa.biz](https://flirexa.biz) is authoritative for current prices and billing periods._
+
+Flirexa is **open-core**: the FREE tier is a complete, unlimited-time VPN service without a paid licence heartbeat. Paid tiers unlock additional features.
+
+## Plans
+
+| Feature | FREE | Starter — from $12/mo | Business — from $49/mo | Enterprise — from $149/mo |
+|---------|:----:|:--------------:|:----------------:|:------------------:|
+| **Max clients** | 80 | 500 | 2000 | Unlimited |
+| **Deployment** | 1 host, 2 local endpoints | 1 host, one endpoint per enabled protocol | Up to 10 managed nodes | Unlimited |
+| **Protocols** | WireGuard, AmneziaWG | + Hysteria2, TUIC, VLESS-Reality | All | All |
+| **Admin panel** | Yes | Yes | Yes | Yes |
+| **Telegram admin bot** | Yes | Yes | Yes | Yes |
+| **Client portal with payments** | Yes | Yes | Yes | Yes |
+| **Traffic & bandwidth limits** | Yes | Yes | Yes | Yes |
+| **Promo codes** | — | Yes | Yes | Yes |
+| **Automatic end-customer renewal** | — | Temporarily unavailable | Temporarily unavailable | Temporarily unavailable |
+| **Client Telegram bot** | — | — | Yes | Yes |
+| **Multi-server management** | — | — | Yes | Yes |
+| **Traffic rules (auto-throttle / quota)** | — | — | Yes | Yes |
+| **Scheduled backups** | — | — | Yes | Yes |
+| **Prepaid customer balance** | — | — | Yes | Yes |
+| **Per-device DNS protection modes** | — | — | Yes | Yes |
+| **Custom and enforced DNS policy** | — | — | — | Yes |
+| **White-label branding** | — | — | — | Full appearance, domain, email, and legal-page controls |
+| **Corporate VPN (site-to-site)** | — | — | — | Yes |
+| **Manager RBAC (scoped admins)** | — | — | — | Yes |
+| **Standard client-app package** | — | — | Separate purchase | Included |
+| **Priority support after onboarding** | — | Yes | Yes | Yes |
+
+FREE stays free forever — no key, no expiry, and no licence heartbeat. Installer diagnostics and update checks are separate network operations; see [free-vs-paid.md](free-vs-paid.md) for the full breakdown.
+
+The matrix applies to newly issued licences. Explicit capabilities already
+signed into an older paid key remain honoured after an update.
+
+## What's included (paid tiers)
+
+- The billing period selected at checkout (monthly, annual, or lifetime when offered)
+- Every release published while your subscription is active
+- Access to the protocols and commercial features included in the selected tier
+- One month of daily onboarding/operational help from purchase, followed by
+  priority ticket support
+- Lifetime, when selected, includes future normal product updates
+
+## Cancellation
+
+Recurring plans can be cancelled before renewal. Your licence stays active through the paid period; afterwards the installation reverts to FREE limits without deleting local clients, servers, or payment records. Lifetime purchases, when offered, do not renew.
+
+## Payment
+
+Subscriptions can be paid either way:
+
+- **Card / fiat** — through the currently available card checkout shown on the website.
+- **Cryptocurrency** — via NOWPayments: BTC, ETH, USDT, USDC, LTC, XMR, TON, SOL, and many others.
+
+After payment confirmation, activation details are shown by the checkout and sent to the address supplied there.
+
+## Upgrade / downgrade
+
+To switch tiers or billing periods, use the account/checkout controls where available or contact [support@flirexa.biz](mailto:support@flirexa.biz).
+
+## More information
+
+- Website: [flirexa.biz](https://flirexa.biz)
+- Documentation: [github.com/Flirexa/flirexa/tree/main/docs](https://github.com/Flirexa/flirexa/tree/main/docs)
+
+========================================================================================
+FILE: project_system_dump.py
+========================================================================================
+#!/usr/bin/env python3
+"""Write one text file containing a readable snapshot of a project tree.
+
+Includes dotfiles and text-based secret/configuration files (for example .env).
+Keep the generated report private.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+
+
+SKIPPED_DIRECTORIES = {
+    ".git",
+    ".venv",
+    "venv",
+    "env",
+    "__pycache__",
+    "node_modules",
+    ".next",
+    ".cache",
+    "build",
+    "dist",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".tox",
+    ".idea",
+    ".vscode",
+}
+
+
+def read_text(path: Path) -> str | None:
+    """Return text content, or None for binary/unreadable files."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+
+    if b"\0" in data:
+        return None
+
+    for encoding in ("utf-8", "utf-8-sig", "utf-16"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            pass
+    return None
+
+
+def write_dump(root: Path, destination: Path) -> tuple[int, int]:
+    root = root.resolve()
+    destination = destination.resolve()
+    included = skipped = 0
+
+    with destination.open("w", encoding="utf-8", newline="\n") as report:
+        report.write(f"PROJECT SYSTEM DUMP\nRoot: {root}\n\n")
+        report.write("Excluded directories: " + ", ".join(sorted(SKIPPED_DIRECTORIES)) + "\n")
+        report.write("Binary/unreadable files are listed but their bytes are not included.\n\n")
+
+        for directory, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+            dir_path = Path(directory)
+            dirnames[:] = sorted(
+                name
+                for name in dirnames
+                if name not in SKIPPED_DIRECTORIES and not (dir_path / name).is_symlink()
+            )
+
+            for filename in sorted(filenames):
+                path = dir_path / filename
+                if path.resolve() == destination:
+                    continue
+                relative = path.relative_to(root).as_posix()
+                report.write("=" * 88 + "\n")
+                report.write(f"FILE: {relative}\n")
+                report.write("=" * 88 + "\n")
+
+                if path.is_symlink():
+                    report.write("[Skipped symbolic link]\n\n")
+                    skipped += 1
+                    continue
+
+                content = read_text(path)
+                if content is None:
+                    report.write("[Skipped binary or unreadable file]\n\n")
+                    skipped += 1
+                    continue
+
+                report.write(content)
+                if content and not content.endswith("\n"):
+                    report.write("\n")
+                report.write("\n")
+                included += 1
+
+    return included, skipped
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Create a single readable project dump.")
+    parser.add_argument("root", nargs="?", default=".", help="Project root (default: current directory)")
+    parser.add_argument(
+        "--output",
+        default="system_dump.txt",
+        help="Report path, relative to the current directory unless absolute",
+    )
+    args = parser.parse_args()
+
+    root = Path(args.root)
+    output = Path(args.output)
+    included, skipped = write_dump(root, output)
+    print(f"Created {output.resolve()} ({included} text files included; {skipped} files skipped).")
+
+
+if __name__ == "__main__":
+    main()
+
+========================================================================================
+FILE: support.md
+========================================================================================
+# Support
+
+_Last verified: 2026-07-24._
+
+## Contact
+
+- **Email:** [support@flirexa.biz](mailto:support@flirexa.biz)
+- **Website chat:** Support widget in the bottom-right corner at [flirexa.biz](https://flirexa.biz)
+
+## Response handling
+
+Enterprise requests receive priority handling. Current support terms and any
+response-time commitments are the ones shown with the selected plan or support
+contract on [flirexa.biz](https://flirexa.biz).
+
+## What to include in a support request
+
+To help us resolve your issue quickly, include the following:
+
+1. **License tier** (Starter / Business / Enterprise)
+2. **Product version** (run `vpnmanager status` to check)
+3. **Description of the issue** with steps to reproduce
+4. **Error messages** or screenshots, if applicable
+5. **Support bundle** (see below)
+
+## Generating a support bundle
+
+The `support-bundle` command collects diagnostic information including logs, system status, and configuration (with secrets automatically redacted):
+
+```bash
+sudo vpnmanager support-bundle --output /tmp --redact-strict
+```
+
+Inspect the generated archive before attaching it. Never attach a backup,
+database dump, `.env`, licence/activation key, VPN configuration, or unredacted
+log unless a secure transfer has been agreed separately.
+
+## Self-help resources
+
+- **Documentation:** [github.com/Flirexa/flirexa/tree/main/docs](https://github.com/Flirexa/flirexa/tree/main/docs)
+- **CLI reference:** See [cli.md](cli.md) for all available commands
+- **Troubleshooting guide:** See [troubleshooting.md](troubleshooting.md) for common issues and solutions
+
+========================================================================================
+FILE: troubleshooting.md
+========================================================================================
+# Troubleshooting
+
+_Last verified: 2026-07-30._
+
+---
+
+## API Not Starting
+
+**Symptom:** The admin panel is unreachable. `systemctl status vpnmanager-api` shows `failed`.
+
+**Check logs:**
+
+```bash
+journalctl -u vpnmanager-api -n 50 --no-pager
+```
+
+**Common causes:**
+
+| Error in logs | Fix |
+|---------------|-----|
+| `connection refused` on port 5432 | PostgreSQL is not running: `systemctl start postgresql` |
+| `password authentication failed` | `DATABASE_URL` in `.env` has wrong credentials |
+| `port 10086 already in use` | Another process is using the port: `ss -tlnp \| grep 10086` |
+| `ModuleNotFoundError` | Virtual environment is broken: `cd /opt/vpnmanager && venv/bin/pip install -r requirements.txt` |
+
+---
+
+## Database Connection Error
+
+```bash
+# Check PostgreSQL status
+systemctl status postgresql
+
+sudo vpnmanager health --json
+```
+
+Do not paste `DATABASE_URL` into an issue or terminal transcript; it contains the
+database password. If credentials drifted, use the installer/restore recovery
+path or collect a strict-redaction support bundle before changing PostgreSQL
+users manually.
+
+---
+
+## WireGuard Interface Not Working
+
+**Interface down:**
+
+```bash
+sudo wg show
+sudo systemctl status wg-quick@wg0
+
+# Bring up manually
+sudo wg-quick up wg0
+```
+
+**IP forwarding disabled:**
+
+```bash
+sysctl net.ipv4.ip_forward
+# Should be 1. If not:
+printf '%s\n' 'net.ipv4.ip_forward = 1' | sudo tee /etc/sysctl.d/99-flirexa-ip-forward.conf
+sudo sysctl --system
+```
+
+**NAT rules missing:**
+
+```bash
+iptables -t nat -L POSTROUTING -n -v
+```
+
+If the MASQUERADE rule is missing, it means `wg-quick up` did not apply the PostUp rules. Restart the interface:
+
+```bash
+sudo wg-quick down wg0
+sudo wg-quick up wg0
+```
+
+**Peer not receiving traffic:**
+
+```bash
+# Check peer is in the interface
+sudo wg show wg0
+
+# Check latest handshake
+sudo wg show wg0 latest-handshakes
+```
+
+A peer that has never handshaked has never connected. Verify:
+- The client config has the correct server public key and endpoint
+- The server endpoint is reachable (UDP, not TCP — check firewall)
+- The client IP matches what is in `AllowedIPs` on the server
+
+---
+
+## AmneziaWG Problems
+
+**`awg: command not found`:**
+
+```bash
+# Check if module is installed
+lsmod | grep amneziawg
+
+# Install amneziawg-dkms
+apt install amneziawg-dkms
+```
+
+**Interface not starting:**
+
+```bash
+sudo awg show
+sudo awg-quick up awg0
+journalctl -u wg-quick@awg0 -n 20
+```
+
+**Clients can connect but no internet:**
+
+```bash
+# Check route exists for the client subnet
+ip route show | grep awg0
+
+# Add manually if missing (replace with your actual subnet)
+ip route add 10.9.0.0/24 dev awg0
+```
+
+**Client uses wrong H values:**
+If clients get stale configs with incorrect obfuscation parameters, have them re-download the config from the admin panel or client portal. Old configs with mismatched H values will fail to establish a connection.
+
+---
+
+## Agent Problems
+
+**Agent not responding:**
+
+```bash
+# On the remote server
+systemctl status vpnmanager-agent
+journalctl -u vpnmanager-agent -n 30 --no-pager
+```
+
+**Wrong API key:**
+
+The API key in the agent's `.env` on the remote server must match the key stored on the main server. If they differ, reinstall the agent:
+- Admin panel → **Servers → {server} → Install Agent**
+
+**Agent installed but main server can't reach it:**
+
+```bash
+# Check port is open on the remote server
+ss -tlnp | grep 8001
+```
+
+From the main server, prefer the panel's Verify/health action so the agent key
+is not placed in shell history or a process argument.
+
+Firewall on the remote server may be blocking port 8001. Allow only the main server:
+
+```bash
+ufw allow from MAIN_SERVER_IP to any port 8001
+```
+
+**Bootstrap fails at "AWG not found":**
+
+The AmneziaWG tools must be installed before the agent can be bootstrapped on an AmneziaWG server. The bootstrap checks for `awg` in `PATH` and returns an error if it is not found. Install AmneziaWG on the remote server first.
+
+---
+
+## SSH Connection Problems
+
+**`Connection refused` or timeout:**
+
+```bash
+# Test SSH from the main server
+ssh -i /path/to/key -p PORT root@REMOTE_IP
+
+# Check SSH service on remote server
+systemctl status sshd
+```
+
+**`Host key verification failed`:**
+
+The remote server's host key changed (server was rebuilt). Remove the stale entry:
+
+```bash
+ssh-keygen -R REMOTE_IP
+```
+
+**Permission denied (publickey):**
+
+The SSH private key in the server record does not match the `authorized_keys` on the remote server. Update the SSH credentials in **Servers → Edit**.
+
+---
+
+## Ports and Firewall
+
+Default ports that must be accessible:
+
+| Port | Protocol | Service |
+|------|----------|---------|
+| 10086 | TCP | Admin panel |
+| 10090 | TCP | Client portal |
+| 51820 | UDP | WireGuard (local server default) |
+| 8001 | TCP | Agent (remote servers, from main server only) |
+
+Check firewall:
+
+```bash
+ufw status verbose
+# or
+iptables -L -n -v
+```
+
+---
+
+## Telegram Bot Not Responding
+
+```bash
+journalctl -u vpnmanager-admin-bot -n 50 --no-pager
+```
+
+**Common issues:**
+
+- Wrong bot token — verify with @BotFather
+- Your Telegram user ID is not in `ADMIN_BOT_ALLOWED_USERS`
+- The bot service crashed — check logs, then restart:
+  ```bash
+  systemctl restart vpnmanager-admin-bot
+  ```
+
+---
+
+## Client Portal Blank Page or Errors
+
+```bash
+journalctl -u vpnmanager-client-portal -n 50 --no-pager
+```
+
+- Verify `SERVICE_API_TOKEN` in `.env` matches between the API and client portal services
+- Check that `vpnmanager-api` is running — the portal depends on the API
+
+---
+
+## Subscriptions Not Expiring
+
+The background worker handles subscription expiry. If subscriptions are not expiring:
+
+```bash
+systemctl status vpnmanager-worker
+```
+
+- The worker must be running
+- `WORKER_ENABLED=true` must be set in `.env`
+
+If the worker is not installed, the API handles background tasks internally, but this is less reliable under load.
+
+---
+
+## License Issues
+
+**"License validation failed":**
+- Check `Settings → License` for the current status
+- Verify your server has internet access to reach the license server
+- Subscription licences normally have a 72-hour cached grace period; Lifetime
+  uses a bound signed offline lease valid for at most 30 days after successful
+  validation
+
+**"Activation required":**
+- The license key does not match this server's ID
+- Get your Server ID from `Settings → License` and contact
+  [Flirexa support](mailto:support@flirexa.biz)
+
+---
+
+## Verify Installation
+
+```bash
+sudo vpnmanager status
+sudo vpnmanager health
+sudo vpnmanager services status
+```
+
+---
+
+## Collect Diagnostic Information for Support
+
+```bash
+sudo vpnmanager support-bundle --output /tmp --redact-strict
+```
+
+Review the archive before sharing it. Do not send `.env`, `DATABASE_URL`,
+`LICENSE_KEY`, bot tokens, agent keys, VPN configuration, client exports, or a
+database/backup archive in a normal support ticket.
+
+========================================================================================
+FILE: updates.md
+========================================================================================
+# Updates
+
+_Last verified: 2026-07-30._
+
+Flirexa has a built-in update system with signed manifests, checksum-verified
+packages, channel-based distribution, and rollback on failure.
+
+---
+
+## How It Works
+
+1. A signed manifest is published to an update channel (`stable` or `test`)
+2. The admin panel polls the channel every few minutes and shows available updates
+3. You trigger the update from the **Updates** page in the admin panel
+4. The system downloads the package, verifies its SHA-256 checksum, creates a backup, applies the update, runs migrations, restarts services, and runs a smoke check
+5. If anything fails, it automatically rolls back from the backup
+
+The manifest is signed with RSA-PSS-SHA256. It binds the release version, package
+URL, and expected SHA-256 digest. Flirexa verifies the manifest before download and
+the package digest afterwards; the package does not carry a second RSA signature.
+
+---
+
+## Update Channels
+
+| Channel | Description |
+|---------|-------------|
+| `stable` | Production releases, fully tested and promoted from `test` |
+| `test` | Release candidates — all new builds go here first |
+
+The active channel is shown on the **Updates** page. Switch channels in **Settings → Update Channel** or via the API:
+
+```bash
+POST /api/v1/updates/channel
+{"channel": "stable"}
+```
+
+The once-per-minute admin badge is a non-blocking local read of the last
+verified manifest and coalesces stale refreshes in the background. Manual
+Check/apply, normal auto-check, and the mandatory watcher still force a fresh
+signed-manifest request, so a slow origin cannot interrupt panel work without
+weakening update discovery.
+
+---
+
+## FREE-tier updates
+
+FREE installations fetch the signed manifest from the official update origin
+(`https://flirexa.biz` by default). They do not send a paid licence heartbeat, but
+an update check is still an outbound request and the server sees ordinary request
+metadata such as source IP. When `LICENSE_KEY` is empty, the downloader does not
+send the `X-License-Key` header.
+
+[GitHub Releases](https://github.com/Flirexa/flirexa/releases) provide public
+version notes and tags; the in-product updater uses the signed manifest/package
+channel described here.
+
+You can also update from the command line at any time:
+
+```bash
+cd /opt/vpnmanager
+sudo bash update.sh
+```
+
+---
+
+## Applying an Update
+
+1. Go to **Updates** in the admin panel
+2. If a new version is available, the version number and changelog are shown
+3. Click **Apply Update**
+4. Progress is shown in real time: download → backup → extract → migrate → restart → smoke check
+5. On success: the new version is running
+6. On failure: the system rolls back automatically and shows the error
+
+### Service Restart Banner
+
+After a successful update, a **Restart Required** banner appears. When you click **Restart Services**:
+
+- A yellow warning banner immediately shows: **"Services are restarting…"**
+- A 20-second countdown is displayed so you know approximately when the panel will respond again
+- The frontend automatically polls every 2 seconds and removes the banner as soon as the API is back online
+- You do not need to manually refresh — the page recovers on its own
+
+The update is protected by an exclusive lock — only one update can run at a time. Concurrent requests are rejected with a clear error.
+
+### Pre-flight Checks
+
+Before downloading, the system verifies:
+- At least 500 MB of free disk space in the install directory
+- At least 200 MB of free space in `/tmp`
+- No other update is currently in progress (checked both in memory and in the database)
+- The new version is newer than the current version (no downgrade)
+
+---
+
+## Update History
+
+Go to **Updates → History** to see all past updates:
+
+- Version transitions (from → to)
+- Status: success, failed, rolled back
+- Duration
+- Whether a rollback backup is still available
+
+---
+
+## Rollback
+
+If you want to manually roll back to the previous version:
+
+1. Go to **Updates → History**
+2. Find the last successful update with a backup available (indicated by a green badge)
+3. Click **Rollback**
+
+The rollback:
+- Restores the code from the pre-update backup archive
+- Restores the database from the pre-update PostgreSQL dump
+- Restarts all services
+- Runs a smoke check
+
+Rollback is also triggered automatically if the update smoke check fails.
+
+An API-launched manual rollback runs detached from the API process and writes a
+persistent log and exit marker. It disables normal auto-apply and suppresses the
+exact rolled-back version from automatic watchers, preventing an immediate
+reinstall; a manual Apply or newer version remains available.
+
+## Paid-runtime migration safety
+
+An update does not reset or reissue a paid licence. The root `.env`, `data/`,
+local database, licence cache, signed licence-server list, virtual environment,
+and operator backups are excluded from the runtime-tree synchronization.
+Business and Enterprise limits and signed feature flags therefore remain
+unchanged when an official package replaces an older implementation layout.
+
+The updater takes a rollback snapshot before replacing code and deletes stale
+files from the active runtime so source omitted by the new package cannot stay
+active accidentally. The new runtime is accepted only after dependency,
+migration, service, and health checks; otherwise the previous runtime and the
+database backup, when present, are restored.
+
+### Smoke Check
+
+After applying an update (or rollback), the system checks:
+- `GET /health` on the API returns HTTP 200 (required — update fails if this fails)
+- Worker systemd service is active (required)
+- Client portal and bots are running (optional, warning only)
+
+---
+
+## Manual Update via Script
+
+In addition to the UI-based mechanism, you can update manually:
+
+```bash
+cd /opt/vpnmanager
+sudo bash update.sh
+```
+
+Options:
+
+```bash
+sudo bash update.sh --no-build     # Skip frontend rebuild (faster)
+sudo bash update.sh --rollback     # Restore from latest backup
+```
+
+Or by re-running the installer:
+
+```bash
+curl -fsSL https://flirexa.biz/install.sh | sudo bash
+```
+
+The installer detects an existing installation and performs a safe upgrade instead of a fresh install.
+
+---
+
+## Concurrent Update Protection
+
+The update mechanism uses two layers of protection against concurrent runs:
+
+1. **In-memory lock** — a flag set when an update task starts, cleared when it ends
+2. **Database guard** — a query that checks for any record in `DOWNLOADING` or `APPLYING` state
+
+If the server restarts mid-update (power loss, OOM), the database record stays in an incomplete state. On next startup, the API automatically marks these orphaned records as `FAILED` and clears the lock, allowing a new update to proceed.
+
+---
+
+## Security
+
+### Package Download Protection
+
+When `LICENSE_KEY` is configured, the package request includes it in the
+`X-License-Key` header so the official service can authorize a licensed package.
+FREE package policy is controlled by the signed manifest and official download
+endpoint.
+
+The `package_url` field is present in the signed manifest (it is part of the cryptographic payload and cannot be tampered with), but it is never displayed in the admin panel or progress logs. Progress logs show only human-readable status messages.
+
+### Manifest Integrity
+
+Every manifest is signed with RSA-PSS-SHA256. The update manager verifies the signature using `data/update_public.pem` before proceeding. A tampered or forged manifest is rejected before any download starts.
+
+---
+
+## Troubleshooting Updates
+
+**"Manifest signature invalid"**
+The `update_public.pem` key on the server does not match the key used to sign the manifest. Make sure the file is at `{install_dir}/data/update_public.pem`.
+
+**"Not enough disk space"**
+Free up disk space before updating. The update needs 500 MB for the backup plus the package size.
+
+**"Another update is in progress"**
+Check the **Updates → History** page. If a record is stuck in `in_progress`, it was likely interrupted. Restart the API service to trigger orphan cleanup:
+
+```bash
+systemctl restart vpnmanager-api
+```
+
+**Update applied but services not restarting**
+The `update_apply.sh` script uses service names from the current installation (e.g., `vpnmanager-api`). If your services have different names (older installations may use `vpnmanager-api`), the script logs a warning but the smoke check still passes if the API responds. The services are typically started by the old systemd units.
+
+**Smoke check failed after update**
+The system rolled back automatically. Check the update log in the history view for the specific error. Fix the root cause, then retry the update.
+
+========================================================================================
+FILE: versioning.md
+========================================================================================
+# Versioning
+
+_Last verified: 2026-07-24._
+
+Flirexa uses semantic versions: `MAJOR.MINOR.PATCH`.
+
+- `PATCH` fixes defects or security/supportability problems without intentionally
+  changing documented interfaces.
+- `MINOR` adds backward-compatible capability.
+- `MAJOR` may change API, CLI, backup, installer, or deployment contracts and
+  requires explicit migration notes.
+
+The current source-tree version is the single line in `VERSION`:
+
+```bash
+cat VERSION
+```
+
+The current public release is available from GitHub without hard-coding a version
+in this document:
+
+```bash
+git ls-remote --tags --refs https://github.com/Flirexa/flirexa.git \
+  | sed 's#.*refs/tags/##' | sort -V | tail -1
+```
+
+Release notes are append-only in [CHANGELOG.md](../CHANGELOG.md). Installed
+systems should normally update through the signed manifest channel described in
+[updates.md](updates.md), not by checking out an arbitrary tag over a running
+installation.
+
+========================================================================================
+FILE: webhook-security.md
+========================================================================================
+# Webhook Security & Payment Pipeline
+
+_Last verified: 2026-07-24._
+
+This document describes how Flirexa receives, verifies and processes payment notifications from each provider — and what stops a customer from ever ending up in "I paid, my subscription didn't activate".
+
+If you just want to set up a provider, see [payment-setup.md](payment-setup.md). This page is for understanding the safety guarantees.
+
+---
+
+## The pipeline at a glance
+
+```
+┌──────────────┐  1) Subscribe       ┌──────────────────┐
+│  Customer    │ ───────────────────►│  Client Portal   │
+└──────────────┘                     └──────────────────┘
+                                              │ 2) create_invoice (provider API)
+                                              ▼
+                                     ┌──────────────────┐
+                                     │   Provider       │
+                                     │ (Stripe, PayLio…)│
+                                     └──────────────────┘
+       3) pay  ▲                              │ 4) webhook/callback
+               │                              ▼
+┌──────────────────┐               ┌────────────────────────┐
+│  Provider        │ ◄─── 8) status check ─── │  vpnmanager-api  │
+│  checkout page   │   (recovery poller)      │ /client-portal/  │
+└──────────────────┘                          │  webhooks/X       │
+                                              └────────────────────────┘
+                                                     │ 5) verify signature/status
+                                                     │ 6) complete_payment (idempotent, row-locked)
+                                                     │ 7) upgrade_subscription + sync WG limits
+```
+
+### Why every step matters
+
+1. **Subscribe** — the customer chooses a provider in the Billing page. Backend filters this list by license tier (free → only NOWPayments).
+2. **create_invoice** — backend posts to the provider's API. Stores a row in `client_portal_payments` with `status='pending'`, our generated `invoice_id`, and the provider's external ID in `provider_invoice_id`.
+3. **Customer pays** at the provider's hosted checkout.
+4. **Webhook/callback** — providers notify `/client-portal/webhooks/<provider>`;
+   PayLio uses GET while the others use their documented callback method.
+5. **Verification** — see the per-provider scheme below. Invalid authentication
+   or a failed upstream status check means no credit.
+6. **complete_payment()** is idempotent. It uses `SELECT … FOR UPDATE` plus a `status == 'completed'` re-check inside the lock, so duplicate webhooks (providers retry) cannot double-credit.
+7. **Subscription upgrade** — plan, expiry, device limit, traffic counters, WG client lifecycle — all applied atomically.
+8. **Recovery poller** runs every 60 s in the monitoring loop and asks each provider "is this pending invoice paid?". Self-heals dropped webhooks.
+
+---
+
+## Signature schemes per provider
+
+| Provider | Header | Algorithm | What's signed | Reference |
+|---|---|---|---|---|
+| **NOWPayments** | `x-nowpayments-sig` | HMAC-SHA512 | sorted JSON body | [docs](https://documenter.getpostman.com/view/7907941/S1a32n38#instant-payments-notifications) |
+| **CryptoPay** | `crypto-pay-api-signature` | HMAC-SHA256 | raw body, key = SHA256(api_token) | [docs](https://help.crypt.bot/crypto-pay-api) |
+| **PayPal** | `paypal-transmission-sig` + 4 more | RSA via PayPal API | full event JSON | [docs](https://developer.paypal.com/api/rest/webhooks/rest/) |
+| **Stripe** | `Stripe-Signature` | HMAC-SHA256, prefix `t=ts,v1=` | `ts.body` | [docs](https://stripe.com/docs/webhooks/signatures) |
+| **Razorpay** | `X-Razorpay-Signature` | HMAC-SHA256 | raw body | [docs](https://razorpay.com/docs/webhooks/validate-test/) |
+| **Mollie** | (none — by design) | API call-back with payment ID | n/a | [docs](https://docs.mollie.com/payments/webhook) |
+| **Payme** | `Authorization: Basic` | base64("Paycom":secret_key) | header only | [docs](https://developer.help.paycom.uz/protokol-merchant-api/) |
+| **PayLio** | callback `ipn_token` hint | API status re-query | payment ID/status from PayLio API | [docs](https://paylio.org/api-docs) |
+
+A few important properties of these schemes:
+
+- **NOWPayments** signs the *sorted-keys* JSON, not the original body. We resort and recompute before comparing — exactly what their reference Python code does.
+- **Stripe** has a built-in 5-minute timestamp tolerance. We use the official SDK's `Webhook.construct_event(body, sig_header, secret)` which both verifies the HMAC and rejects stale events.
+- **PayPal** doesn't sign locally — verification means calling PayPal's `/v1/notifications/verify-webhook-signature` endpoint with all the original headers. This requires you to register a Webhook in the PayPal app and put the resulting Webhook ID into our admin panel.
+- **Mollie** webhooks contain only the payment ID. Verification = we call Mollie's API back ("is this payment paid?"). A forged webhook can't fake a real Mollie payment ID.
+- **Payme** uses HTTP Basic Auth as its sole verification — the merchant secret IS the credential.
+- **PayLio** sends an unsigned GET callback. Flirexa treats it only as a hint
+  and re-queries PayLio's payment-status API before crediting.
+
+If you ever need to add a new provider, mirror one of these patterns. Plugin contract is in `plugins/payments/_template.py`.
+
+---
+
+## Idempotency: why duplicate webhooks are safe
+
+Providers retry webhooks until they get a 200. That means we'll often receive the same `payment_status=finished` event 2–5 times.
+
+`complete_payment()` (in `src/modules/subscription/subscription_manager.py`) is built to handle this:
+
+```python
+def complete_payment(self, invoice_id, …):
+    # 1) Acquire row-level lock (PostgreSQL SELECT FOR UPDATE)
+    payment = db.query(ClientPortalPayment) \
+        .filter(invoice_id == invoice_id) \
+        .with_for_update() \
+        .first()
+
+    # 2) Re-check status INSIDE the lock — concurrent webhook will see "completed"
+    if payment.status == "completed":
+        return True   # idempotent no-op
+
+    # 3) Mark completed, upgrade subscription, sync WG, commit
+    …
+```
+
+The `with_for_update()` translates to `SELECT … FOR UPDATE` on PostgreSQL. The second webhook arriving in parallel waits until the first releases the lock, then sees `status='completed'` and exits cleanly. SQLite degrades gracefully — the in-process row check is enough for non-prod use.
+
+Promo code usage counters are incremented with raw SQL (`UPDATE … SET used_count = COALESCE(used_count, 0) + 1`) instead of the ORM read-modify-write pattern, so concurrent webhooks can't lose increments.
+
+---
+
+## Recovery poller: dropped webhooks self-heal
+
+Webhooks can be lost — provider had a hiccup, our service restarted between the HTTPS handshake and DB commit, the network blipped. Without a recovery, that customer's payment hangs in `pending` forever.
+
+The monitoring loop (`src/api/scheduler.py:_try_recover_pending_payments`) runs every 60 s and:
+
+1. Selects rows where `status='pending'` AND `created_at <= now − 15 s` (15 s is the head start we give to the live webhook path so we don't race normal completion).
+2. For each row, calls the provider's `check_payment(provider_invoice_id)`.
+3. If the provider returns `COMPLETED`, runs the same `complete_payment()` path the webhook would have. Idempotent — even if the original webhook arrives later, no double credit.
+
+This catches the rare edge case where a webhook never lands. You'll see `Recovered dropped-webhook payment: invoice=… provider=… user=…` in the API logs.
+
+---
+
+## What's NOT covered automatically
+
+These are the cases where the system can't help and a human (you) must act:
+
+- **Provider sent a refund**. We log it and mark the payment as `refunded`, but we DON'T downgrade the subscription. Behaviour is your business call — if you want to revoke access on refund, you can wire that in `complete_payment` or use the admin panel manually.
+- **Customer paid the wrong amount** (under-payment, NOWPayments `partially_paid`). We treat these as `FAILED` and DON'T credit. Customer needs to either pay again or contact support.
+- **Provider keys rotated and you forgot to update one side**. Webhook signature verification will start returning 401, but the subscription create-invoice flow will fail differently. Run **Test** in the admin panel — it'll tell you which side is out of sync.
+- **Long-tail provider downtime**. If the provider is down for 6+ hours, the `pending` payment is logged with a louder warning every monitoring cycle. You can manually mark `completed` from the admin panel after confirming with the provider.
+
+---
+
+## Logs to check
+
+When something looks off, these are the most useful greps:
+
+```bash
+# All webhook traffic
+journalctl -u vpnmanager-api -n 500 | grep -iE 'webhook|complete_payment|signature'
+
+# Per-provider
+journalctl -u vpnmanager-api -n 500 | grep -iE 'nowpayments|cryptopay|paypal|stripe|razorpay|mollie|payme'
+
+# Recovery poller activity
+journalctl -u vpnmanager-api -n 500 | grep -iE 'recover.*payment|stuck.*pending'
+
+# Subscriptions activated in last hour
+journalctl -u vpnmanager-api --since "1 hour ago" | grep -iE 'subscription.*upgraded|subscription.*activated'
+```
+
+---
+
+## Verifying signature handling
+
+- For providers configured in the admin panel, the **Test** button runs the
+  relevant verification/connection checks and renders a green/red checklist.
+  PayLio is currently configured through `.env`; verify it with a low-value
+  sandbox/test checkout and API logs.
+
+> The vendor's internal signature-regression and payment-simulation scripts (under `tools/`) are part of the CI/build tooling and are **not shipped in the public open-core tree**. The admin **Test** button exercises the same security-critical verification path in-process, so you do not need them.
+
+---
+
+## Auditing your own deployment
+
+Quick checklist before going live:
+
+- [ ] Each provider you've enabled has its **Webhook URL registered** at the provider's dashboard (not just our admin panel)
+- [ ] Each provider's **Webhook Secret** in admin matches what's set at the provider
+- [ ] **Test** button in admin shows green for every active card-configured provider
+- [ ] The webhook endpoint is reachable over HTTPS from the public internet (providers can't POST to a private or HTTP-only URL)
+- [ ] You've made one real low-amount test transaction for each provider you enabled
+- [ ] You've verified the recovery poller works: kill the API service, pay a test invoice, restart the API, wait 60s, see the payment auto-complete
+
+If all six pass, the documented integration checks are complete. Continue to
+monitor provider dashboards, webhook failures, refunds, and pending-payment
+recovery in production.
+
+========================================================================================
+FILE: screenshots/bots.png
+========================================================================================
+[Skipped binary or unreadable file]
+
+========================================================================================
+FILE: screenshots/clients.png
+========================================================================================
+[Skipped binary or unreadable file]
+
+========================================================================================
+FILE: screenshots/dashboard.png
+========================================================================================
+[Skipped binary or unreadable file]
+
+========================================================================================
+FILE: screenshots/portal.png
+========================================================================================
+[Skipped binary or unreadable file]
+
+========================================================================================
+FILE: screenshots/servers.png
+========================================================================================
+[Skipped binary or unreadable file]
+
+========================================================================================
+FILE: screenshots/settings.png
+========================================================================================
+[Skipped binary or unreadable file]
+

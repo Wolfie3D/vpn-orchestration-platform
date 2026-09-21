@@ -101,8 +101,16 @@ def upgrade() -> None:
     # -- AuditAction enum: add backup values --
     conn = op.get_bind()
     try:
-        conn.execute(text("ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'backup_create'"))
-        conn.execute(text("ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'backup_restore'"))
+        if conn.dialect.name == "postgresql":
+            type_exists = conn.execute(
+                text("SELECT 1 FROM pg_type WHERE typname = 'auditaction'")
+            ).scalar()
+            if type_exists:
+                conn.execute(text("ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'backup_create'"))
+                conn.execute(text("ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'backup_restore'"))
+        else:
+            conn.execute(text("ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'backup_create'"))
+            conn.execute(text("ALTER TYPE auditaction ADD VALUE IF NOT EXISTS 'backup_restore'"))
     except Exception:
         pass  # Values already exist or enum not present
 
